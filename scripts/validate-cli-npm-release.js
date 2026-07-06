@@ -50,6 +50,7 @@ const checkRegistry = args.has('--check-registry')
 const allowExisting = args.has('--allow-existing')
 const requireStagedBinaries = args.has('--require-staged-binaries')
 const requireAllStagedBinaries = args.has('--all-staged-binaries')
+const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm'
 const failures = []
 
 function readJson(relativePath) {
@@ -87,7 +88,7 @@ function assertPackageFiles(pkg, expected, label) {
 }
 
 function npmViewPackageVersion(name, version) {
-  const result = spawnSync('npm', ['view', `${name}@${version}`, 'version', '--json'], {
+  const result = spawnSync(npmCommand, ['view', `${name}@${version}`, 'version', '--json'], {
     cwd: repoRoot,
     encoding: 'utf8',
   })

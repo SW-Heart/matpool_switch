@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process'
 const packageJsonPath = path.join(process.cwd(), 'package.json')
 const pkg = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'))
 const spec = `${pkg.name}@${pkg.version}`
+const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm'
 
 function run(command, args, options = {}) {
   return spawnSync(command, args, {
@@ -16,7 +17,7 @@ function run(command, args, options = {}) {
   })
 }
 
-const view = run('npm', ['view', spec, 'version', '--json'])
+const view = run(npmCommand, ['view', spec, 'version', '--json'])
 if (view.status === 0) {
   console.log(`${spec} already exists on npm; skipping publish.`)
   process.exit(0)
@@ -29,7 +30,7 @@ if (!viewOutput.includes('E404') && !viewOutput.includes('404')) {
 }
 
 console.log(`Publishing ${spec}...`)
-const publish = run('npm', ['publish', '--access', 'public'], { stdio: 'inherit' })
+const publish = run(npmCommand, ['publish', '--access', 'public'], { stdio: 'inherit' })
 if (publish.error) {
   console.error(publish.error.message)
   process.exit(1)
