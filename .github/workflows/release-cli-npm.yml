@@ -64,6 +64,11 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: node -e "if (!process.env.NODE_AUTH_TOKEN) { console.error('NPM_TOKEN secret is missing or empty'); process.exit(1); } console.log('NPM_TOKEN secret is configured')"
 
+      - name: Verify npm token can authenticate
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm whoami
+
       - name: Build CLI
         run: cargo build --manifest-path src-tauri/Cargo.toml --bin matpool --no-default-features --profile cli-release
 
@@ -77,7 +82,7 @@ jobs:
         run: npm publish --access public
 
   publish-main:
-    name: Publish @matpool/switch
+    name: Publish @mtswitch/switch
     runs-on: ubuntu-24.04
     needs: build-native
 
@@ -93,6 +98,11 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: node -e "if (!process.env.NODE_AUTH_TOKEN) { console.error('NPM_TOKEN secret is missing or empty'); process.exit(1); } console.log('NPM_TOKEN secret is configured')"
+
+      - name: Verify npm token can authenticate
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm whoami
 
       - name: Publish main package
         working-directory: packages/switch

@@ -20,7 +20,7 @@ Intel on `macos-15-intel`.
 
 ## Prerequisites
 
-1. Create the npm organization/package scope `@matpool`.
+1. Create the npm organization/package scope `@mtswitch`.
 2. Create an npm automation token with publish permission.
 3. Add the token to the GitHub repository secret `NPM_TOKEN`.
 4. Ensure package versions are identical across `packages/switch*`.
