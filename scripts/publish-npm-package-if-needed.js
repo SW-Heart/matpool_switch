@@ -14,10 +14,15 @@ function run(command, args, options = {}) {
     encoding: 'utf8',
     stdio: options.stdio ?? 'pipe',
     env: process.env,
+    shell: process.platform === 'win32',
   })
 }
 
 const view = run(npmCommand, ['view', spec, 'version', '--json'])
+if (view.error) {
+  console.error(`Failed to run ${npmCommand}: ${view.error.message}`)
+  process.exit(1)
+}
 if (view.status === 0) {
   console.log(`${spec} already exists on npm; skipping publish.`)
   process.exit(0)
@@ -32,7 +37,7 @@ if (!viewOutput.includes('E404') && !viewOutput.includes('404')) {
 console.log(`Publishing ${spec}...`)
 const publish = run(npmCommand, ['publish', '--access', 'public'], { stdio: 'inherit' })
 if (publish.error) {
-  console.error(publish.error.message)
+  console.error(`Failed to run ${npmCommand}: ${publish.error.message}`)
   process.exit(1)
 }
 process.exit(typeof publish.status === 'number' ? publish.status : publish.signal ? 1 : 0)

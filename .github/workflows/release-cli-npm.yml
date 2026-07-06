@@ -68,13 +68,21 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm whoami
 
+      - name: Check native package availability
+        id: native-package
+        working-directory: packages/${{ matrix.package }}
+        run: node ../../scripts/check-npm-package-exists.js
+
       - name: Build CLI
+        if: steps.native-package.outputs.exists != 'true'
         run: cargo build --manifest-path src-tauri/Cargo.toml --bin matpool --no-default-features --profile cli-release
 
       - name: Stage native binary
+        if: steps.native-package.outputs.exists != 'true'
         run: node scripts/stage-npm-binary.js
 
       - name: Publish native package
+        if: steps.native-package.outputs.exists != 'true'
         working-directory: packages/${{ matrix.package }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

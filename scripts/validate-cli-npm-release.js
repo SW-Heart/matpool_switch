@@ -119,8 +119,10 @@ assertPackageFiles(mainPkg, ['bin', 'README.md', 'package.json'], 'main package'
 
 const mainReadmePath = path.join(packageDir(mainPackage.dir), 'README.md')
 const mainShimPath = path.join(packageDir(mainPackage.dir), 'bin', 'matpool.js')
+const npmPackageExistsScriptPath = path.join(repoRoot, 'scripts', 'check-npm-package-exists.js')
 assert(fs.existsSync(mainReadmePath), 'main package README.md is missing')
 assert(fs.existsSync(mainShimPath), 'main package bin/matpool.js is missing')
+assert(fs.existsSync(npmPackageExistsScriptPath), 'scripts/check-npm-package-exists.js is missing')
 
 const expectedOptionalDeps = Object.fromEntries(
   nativePackages.map((pkg) => [pkg.name, mainPkg.version]),
@@ -169,6 +171,10 @@ assert(
 assert(
   workflow.includes('publish-npm-package-if-needed.js'),
   'release workflow must publish npm packages through the idempotent publish script',
+)
+assert(
+  workflow.includes('check-npm-package-exists.js'),
+  'release workflow must skip native package builds when the package already exists',
 )
 
 if (checkRegistry) {
