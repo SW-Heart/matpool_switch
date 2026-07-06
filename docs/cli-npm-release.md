@@ -5,12 +5,12 @@ native package per supported platform.
 
 ## Packages
 
-- `@matpool/switch`: user-facing package. Installs the `matpool` command.
-- `@matpool/switch-darwin-arm64`: native binary for macOS Apple Silicon.
-- `@matpool/switch-darwin-x64`: native binary for macOS Intel.
-- `@matpool/switch-linux-arm64`: native binary for Linux arm64.
-- `@matpool/switch-linux-x64`: native binary for Linux x64.
-- `@matpool/switch-win32-x64`: native binary for Windows x64.
+- `@mtswitch/switch`: user-facing package. Installs the `matpool` command.
+- `@mtswitch/switch-darwin-arm64`: native binary for macOS Apple Silicon.
+- `@mtswitch/switch-darwin-x64`: native binary for macOS Intel.
+- `@mtswitch/switch-linux-arm64`: native binary for Linux arm64.
+- `@mtswitch/switch-linux-x64`: native binary for Linux x64.
+- `@mtswitch/switch-win32-x64`: native binary for Windows x64.
 
 The main package contains only a Node.js shim. npm installs the matching
 optional native package for the current OS and CPU.
@@ -26,7 +26,7 @@ Intel on `macos-15-intel`.
 4. Ensure package versions are identical across `packages/switch*`.
 5. Confirm the version does not already exist on npm.
 
-No Apple Developer certificate is required for `npm i -g @matpool/switch`.
+No Apple Developer certificate is required for `npm i -g @mtswitch/switch`.
 The npm CLI package ships a command-line binary, not a macOS `.app` bundle or
 `.pkg` installer. Apple signing/notarization is still needed for the desktop
 client distribution.
@@ -117,7 +117,7 @@ the packages in this order:
 1. Validate package metadata and ensure the version is not already on npm.
 2. Build each native package on its own platform runner.
 3. Publish all native optional packages.
-4. Publish the main `@matpool/switch` package.
+4. Publish the main `@mtswitch/switch` package.
 
 Create a release tag:
 
@@ -135,7 +135,7 @@ first, validate on real macOS, Windows, and Linux machines, then promote to
 ## User Install
 
 ```bash
-npm i -g @matpool/switch
+npm i -g @mtswitch/switch
 matpool setup
 matpool login
 matpool status

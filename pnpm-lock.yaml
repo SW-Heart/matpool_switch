@@ -222,19 +222,19 @@ importers:
 
   packages/switch:
     optionalDependencies:
-      '@matpool/switch-darwin-arm64':
+      '@mtswitch/switch-darwin-arm64':
         specifier: 0.1.0
         version: link:../switch-darwin-arm64
-      '@matpool/switch-darwin-x64':
+      '@mtswitch/switch-darwin-x64':
         specifier: 0.1.0
         version: link:../switch-darwin-x64
-      '@matpool/switch-linux-arm64':
+      '@mtswitch/switch-linux-arm64':
         specifier: 0.1.0
         version: link:../switch-linux-arm64
-      '@matpool/switch-linux-x64':
+      '@mtswitch/switch-linux-x64':
         specifier: 0.1.0
         version: link:../switch-linux-x64
-      '@matpool/switch-win32-x64':
+      '@mtswitch/switch-win32-x64':
         specifier: 0.1.0
         version: link:../switch-win32-x64
 

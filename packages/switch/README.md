@@ -1,4 +1,4 @@
-# @matpool/switch
+# @mtswitch/switch
 
 Lightweight command line entry for Matpool Switch. It installs the `matpool`
 command and routes supported coding tools through the local Matpool proxy.
@@ -6,7 +6,7 @@ command and routes supported coding tools through the local Matpool proxy.
 ## Install
 
 ```bash
-npm i -g @matpool/switch
+npm i -g @mtswitch/switch
 ```
 
 Node.js 18 or newer is required. The package installs a small JavaScript shim

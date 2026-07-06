@@ -16,7 +16,7 @@
 ## CLI 快速安装
 
 ```bash
-npm i -g @matpool/switch
+npm i -g @mtswitch/switch
 matpool setup
 ```
 
@@ -90,7 +90,7 @@ Helps users route traffic from **Claude Code / Claude Desktop / Codex / Gemini C
 ## CLI Quick Install
 
 ```bash
-npm i -g @matpool/switch
+npm i -g @mtswitch/switch
 matpool setup
 ```
 

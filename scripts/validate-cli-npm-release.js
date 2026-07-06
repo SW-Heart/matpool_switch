@@ -10,31 +10,31 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 const nativePackages = [
   {
     dir: 'switch-darwin-arm64',
-    name: '@matpool/switch-darwin-arm64',
+    name: '@mtswitch/switch-darwin-arm64',
     os: 'darwin',
     cpu: 'arm64',
   },
   {
     dir: 'switch-darwin-x64',
-    name: '@matpool/switch-darwin-x64',
+    name: '@mtswitch/switch-darwin-x64',
     os: 'darwin',
     cpu: 'x64',
   },
   {
     dir: 'switch-linux-arm64',
-    name: '@matpool/switch-linux-arm64',
+    name: '@mtswitch/switch-linux-arm64',
     os: 'linux',
     cpu: 'arm64',
   },
   {
     dir: 'switch-linux-x64',
-    name: '@matpool/switch-linux-x64',
+    name: '@mtswitch/switch-linux-x64',
     os: 'linux',
     cpu: 'x64',
   },
   {
     dir: 'switch-win32-x64',
-    name: '@matpool/switch-win32-x64',
+    name: '@mtswitch/switch-win32-x64',
     os: 'win32',
     cpu: 'x64',
   },
@@ -42,7 +42,7 @@ const nativePackages = [
 
 const mainPackage = {
   dir: 'switch',
-  name: '@matpool/switch',
+  name: '@mtswitch/switch',
 }
 
 const args = new Set(process.argv.slice(2))

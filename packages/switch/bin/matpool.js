@@ -9,11 +9,11 @@ function platformPackageName() {
   const platform = process.platform;
   const arch = process.arch;
 
-  if (platform === 'darwin' && arch === 'arm64') return '@matpool/switch-darwin-arm64';
-  if (platform === 'darwin' && arch === 'x64') return '@matpool/switch-darwin-x64';
-  if (platform === 'linux' && arch === 'arm64') return '@matpool/switch-linux-arm64';
-  if (platform === 'linux' && arch === 'x64') return '@matpool/switch-linux-x64';
-  if (platform === 'win32' && arch === 'x64') return '@matpool/switch-win32-x64';
+  if (platform === 'darwin' && arch === 'arm64') return '@mtswitch/switch-darwin-arm64';
+  if (platform === 'darwin' && arch === 'x64') return '@mtswitch/switch-darwin-x64';
+  if (platform === 'linux' && arch === 'arm64') return '@mtswitch/switch-linux-arm64';
+  if (platform === 'linux' && arch === 'x64') return '@mtswitch/switch-linux-x64';
+  if (platform === 'win32' && arch === 'x64') return '@mtswitch/switch-win32-x64';
 
   throw new Error(`Unsupported platform: ${platform}-${arch}`);
 }
@@ -56,7 +56,7 @@ function resolveBinary() {
 
 function updateSelf() {
   const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-  const result = spawnSync(npmCommand, ['install', '-g', '@matpool/switch@latest'], {
+  const result = spawnSync(npmCommand, ['install', '-g', '@mtswitch/switch@latest'], {
     stdio: 'inherit'
   });
 
