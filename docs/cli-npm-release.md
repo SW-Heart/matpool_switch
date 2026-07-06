@@ -15,6 +15,9 @@ native package per supported platform.
 The main package contains only a Node.js shim. npm installs the matching
 optional native package for the current OS and CPU.
 
+The GitHub Actions workflow builds macOS Apple Silicon on `macos-14` and macOS
+Intel on `macos-15-intel`.
+
 ## Prerequisites
 
 1. Create the npm organization/package scope `@matpool`.

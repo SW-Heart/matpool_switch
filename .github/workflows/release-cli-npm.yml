@@ -35,7 +35,7 @@ jobs:
         include:
           - os: macos-14
             package: switch-darwin-arm64
-          - os: macos-13
+          - os: macos-15-intel
             package: switch-darwin-x64
           - os: ubuntu-24.04
             package: switch-linux-x64
