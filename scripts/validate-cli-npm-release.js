@@ -47,6 +47,7 @@ const mainPackage = {
 
 const args = new Set(process.argv.slice(2))
 const checkRegistry = args.has('--check-registry')
+const allowExisting = args.has('--allow-existing')
 const requireStagedBinaries = args.has('--require-staged-binaries')
 const requireAllStagedBinaries = args.has('--all-staged-binaries')
 const failures = []
@@ -92,6 +93,10 @@ function npmViewPackageVersion(name, version) {
   })
 
   if (result.status === 0) {
+    if (allowExisting) {
+      console.log(`${name}@${version} already exists on npm; release retries will skip it.`)
+      return
+    }
     failures.push(`${name}@${version} already exists on npm`)
     return
   }
@@ -160,7 +165,10 @@ assert(
   workflow.includes('--bin matpool --no-default-features --profile cli-release'),
   'release workflow must build the headless CLI with --no-default-features --profile cli-release',
 )
-assert(workflow.includes('npm publish --access public'), 'release workflow must publish public npm packages')
+assert(
+  workflow.includes('publish-npm-package-if-needed.js'),
+  'release workflow must publish npm packages through the idempotent publish script',
+)
 
 if (checkRegistry) {
   npmViewPackageVersion(mainPkg.name, mainPkg.version)

@@ -119,6 +119,10 @@ the packages in this order:
 3. Publish all native optional packages.
 4. Publish the main `@mtswitch/switch` package.
 
+Publishing is idempotent: if a retry sees that a package version already exists
+on npm, it skips that package and continues with the remaining packages. This
+allows recovery from partial native-package publishes.
+
 Create a release tag:
 
 ```bash
