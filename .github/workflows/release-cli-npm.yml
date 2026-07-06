@@ -59,6 +59,11 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - name: Verify npm token is configured
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: node -e "if (!process.env.NODE_AUTH_TOKEN) { console.error('NPM_TOKEN secret is missing or empty'); process.exit(1); } console.log('NPM_TOKEN secret is configured')"
+
       - name: Build CLI
         run: cargo build --manifest-path src-tauri/Cargo.toml --bin matpool --no-default-features --profile cli-release
 
@@ -83,6 +88,11 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+
+      - name: Verify npm token is configured
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: node -e "if (!process.env.NODE_AUTH_TOKEN) { console.error('NPM_TOKEN secret is missing or empty'); process.exit(1); } console.log('NPM_TOKEN secret is configured')"
 
       - name: Publish main package
         working-directory: packages/switch
