@@ -1,0 +1,91 @@
+name: Release CLI npm packages
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'cli-v*'
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    name: Validate package metadata
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Check release package metadata and npm availability
+        run: node scripts/validate-cli-npm-release.js --check-registry
+
+  build-native:
+    name: Build ${{ matrix.package }}
+    needs: preflight
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            package: switch-darwin-arm64
+          - os: macos-13
+            package: switch-darwin-x64
+          - os: ubuntu-24.04
+            package: switch-linux-x64
+          - os: ubuntu-24.04-arm
+            package: switch-linux-arm64
+          - os: windows-2022
+            package: switch-win32-x64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build CLI
+        run: cargo build --manifest-path src-tauri/Cargo.toml --bin matpool --no-default-features --profile cli-release
+
+      - name: Stage native binary
+        run: node scripts/stage-npm-binary.js
+
+      - name: Publish native package
+        working-directory: packages/${{ matrix.package }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
+
+  publish-main:
+    name: Publish @matpool/switch
+    runs-on: ubuntu-24.04
+    needs: build-native
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Publish main package
+        working-directory: packages/switch
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public

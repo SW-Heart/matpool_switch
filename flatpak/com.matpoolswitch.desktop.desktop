@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Matpool Switch
+Comment=All-in-One Assistant for Claude Code, Codex & Gemini CLI
+Exec=matpool-switch
+Icon=com.matpoolswitch.desktop
+Terminal=false
+Categories=Utility;Development;
+StartupNotify=true

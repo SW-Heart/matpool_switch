@@ -1,0 +1,41 @@
+{
+  "name": "@matpool/switch",
+  "version": "0.1.0",
+  "description": "Matpool Switch command line interface",
+  "license": "MIT",
+  "type": "commonjs",
+  "homepage": "https://matpool.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://gitee.com/wheart_eth/matpool_switch.git"
+  },
+  "bugs": {
+    "url": "https://gitee.com/wheart_eth/matpool_switch/issues"
+  },
+  "keywords": [
+    "matpool",
+    "cli",
+    "claude",
+    "codex",
+    "gemini",
+    "proxy"
+  ],
+  "bin": {
+    "matpool": "bin/matpool.js"
+  },
+  "files": [
+    "bin",
+    "README.md",
+    "package.json"
+  ],
+  "optionalDependencies": {
+    "@matpool/switch-darwin-arm64": "0.1.0",
+    "@matpool/switch-darwin-x64": "0.1.0",
+    "@matpool/switch-linux-arm64": "0.1.0",
+    "@matpool/switch-linux-x64": "0.1.0",
+    "@matpool/switch-win32-x64": "0.1.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
