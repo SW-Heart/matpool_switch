@@ -8,11 +8,12 @@
 //! - Claude 的格式转换逻辑保留在此文件（用于 OpenRouter 旧接口回退）
 
 use super::{
+    ProxyError,
     error_mapper::{get_error_message, map_proxy_error_to_status},
     forwarder::ActiveConnectionGuard,
     handler_config::{
-        claude_stream_usage_event_filter, codex_stream_usage_event_filter, CLAUDE_PARSER_CONFIG,
-        CODEX_PARSER_CONFIG, GEMINI_PARSER_CONFIG, OPENAI_PARSER_CONFIG,
+        CLAUDE_PARSER_CONFIG, CODEX_PARSER_CONFIG, GEMINI_PARSER_CONFIG, OPENAI_PARSER_CONFIG,
+        claude_stream_usage_event_filter, codex_stream_usage_event_filter,
     },
     handler_context::RequestContext,
     providers::{
@@ -25,22 +26,21 @@ use super::{
         transform_codex_chat, transform_gemini, transform_responses,
     },
     response_processor::{
-        create_logged_passthrough_stream, process_response, read_decoded_body,
+        SseUsageCollector, create_logged_passthrough_stream, process_response, read_decoded_body,
         strip_entity_headers_for_rebuilt_body, strip_hop_by_hop_response_headers,
-        usage_logging_enabled, SseUsageCollector,
+        usage_logging_enabled,
     },
     server::ProxyState,
     sse::{strip_sse_field, take_sse_block},
     types::*,
     usage::parser::TokenUsage,
-    ProxyError,
 };
 use crate::app_config::AppType;
 use crate::database::PRICING_SOURCE_REQUEST;
-use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
+use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
 use bytes::Bytes;
 use http_body_util::BodyExt;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 // ============================================================================
 // 健康检查和状态查询（简单端点）
@@ -66,13 +66,24 @@ pub async fn get_status(State(state): State<ProxyState>) -> Result<Json<ProxySta
 /// GET /v1/models — 模型列表
 ///
 /// 提供给任何通过 proxy 访问的 CLI 工具（Claude Code、Codex 等）拉取可用模型。
-/// 读取 Matpool 的 Codex 模型目录文件（如果存在），否则返回一份内置的 Matpool
-/// 常见模型列表，确保 Claude Code 的 `/model` 也能看到我们所有模型。
+/// 优先读取当前 Claude provider 的 Matpool 模型目录；没有时再读 Codex 目录文件
+/// （如果存在），否则返回一份内置的 Matpool 常见模型列表，确保 Claude Code 的
+/// `/model` 也能看到可用模型。
 ///
 /// Claude Code 在会话启动或 `/model` 命令时可以调用 `ANTHROPIC_BASE_URL/models`
 /// 获取模型列表（OpenAI 风格），也按 Anthropic `/v1/models` 格式响应。
-pub async fn handle_models() -> Result<Json<Value>, ProxyError> {
-    // 优先读取 Codex 目录文件（已被 takeover 同步写入）
+pub async fn handle_models(State(state): State<ProxyState>) -> Result<Json<Value>, ProxyError> {
+    if let Ok(providers) = state.provider_router.select_providers("claude").await {
+        if let Some(catalog) = providers
+            .first()
+            .and_then(|provider| provider.settings_config.get("modelCatalog"))
+            .cloned()
+        {
+            return Ok(Json(catalog));
+        }
+    }
+
+    // 其次读取 Codex 目录文件（已被 takeover 同步写入）
     let generated_path = crate::codex_config::get_codex_model_catalog_path();
     let active_catalog_path = match crate::codex_config::read_codex_config_text() {
         Ok(config_text) => {
@@ -1447,7 +1458,7 @@ fn responses_sse_to_response_value(body: &str) -> Result<Value, ProxyError> {
             Err(e) => {
                 return Err(ProxyError::TransformError(format!(
                     "Failed to parse upstream SSE event: {e}"
-                )))
+                )));
             }
         };
 
@@ -1653,7 +1664,7 @@ fn chat_sse_to_response_value(body: &str) -> Result<Value, ProxyError> {
                 Err(e) => {
                     return Err(ProxyError::TransformError(format!(
                         "Failed to parse upstream SSE chunk: {e}"
-                    )))
+                    )));
                 }
             };
 

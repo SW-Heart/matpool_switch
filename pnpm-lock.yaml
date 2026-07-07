@@ -223,19 +223,19 @@ importers:
   packages/switch:
     optionalDependencies:
       '@mtswitch/switch-darwin-arm64':
-        specifier: 0.1.0
+        specifier: 0.1.1
         version: link:../switch-darwin-arm64
       '@mtswitch/switch-darwin-x64':
-        specifier: 0.1.0
+        specifier: 0.1.1
         version: link:../switch-darwin-x64
       '@mtswitch/switch-linux-arm64':
-        specifier: 0.1.0
+        specifier: 0.1.1
         version: link:../switch-linux-arm64
       '@mtswitch/switch-linux-x64':
-        specifier: 0.1.0
+        specifier: 0.1.1
         version: link:../switch-linux-x64
       '@mtswitch/switch-win32-x64':
-        specifier: 0.1.0
+        specifier: 0.1.1
         version: link:../switch-win32-x64
 
   packages/switch-darwin-arm64: {}
@@ -2362,7 +2362,7 @@ packages:
     resolution: {integrity: sha512-c4FRfUm/dbcWZ7U+1Wq0AwCyFL+3nt2bEw05wfxSz+DWpWsitgmSgYmy2dQdWyKC1694ELPqMs/YzUSNozLt8A==}
     engines: {node: 4.x || >=6.0.0}
     peerDependencies:
-      encoding: ^0.1.0
+      encoding: ^0.1.1
     peerDependenciesMeta:
       encoding:
         optional: true

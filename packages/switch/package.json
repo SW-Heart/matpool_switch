@@ -1,6 +1,6 @@
 {
   "name": "@mtswitch/switch",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Matpool Switch command line interface",
   "license": "MIT",
   "type": "commonjs",
@@ -29,11 +29,11 @@
     "package.json"
   ],
   "optionalDependencies": {
-    "@mtswitch/switch-darwin-arm64": "0.1.0",
-    "@mtswitch/switch-darwin-x64": "0.1.0",
-    "@mtswitch/switch-linux-arm64": "0.1.0",
-    "@mtswitch/switch-linux-x64": "0.1.0",
-    "@mtswitch/switch-win32-x64": "0.1.0"
+    "@mtswitch/switch-darwin-arm64": "0.1.1",
+    "@mtswitch/switch-darwin-x64": "0.1.1",
+    "@mtswitch/switch-linux-arm64": "0.1.1",
+    "@mtswitch/switch-linux-x64": "0.1.1",
+    "@mtswitch/switch-win32-x64": "0.1.1"
   },
   "engines": {
     "node": ">=18"

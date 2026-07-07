@@ -8,7 +8,7 @@ use crate::app_config::AppType;
 use crate::database::Database;
 use crate::provider::Provider;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 const MATPOOL_PRICING_URL: &str = "https://token.matpool.com/api/pricing";
 const CODEX_DEFAULT_CONTEXT_WINDOW: u64 = 128_000;
@@ -145,14 +145,37 @@ fn sync_claude_provider(
     defaults: &mut Vec<(String, String)>,
 ) -> bool {
     let mut changed = false;
-    for key in [
+    changed |= ensure_env_model(
+        provider,
         "ANTHROPIC_MODEL",
+        model_names,
+        preferred_claude_model,
+    );
+    changed |= ensure_env_model(
+        provider,
         "ANTHROPIC_DEFAULT_OPUS_MODEL",
+        model_names,
+        preferred_claude_opus_model,
+    );
+    changed |= ensure_env_model(
+        provider,
         "ANTHROPIC_DEFAULT_SONNET_MODEL",
+        model_names,
+        preferred_claude_sonnet_model,
+    );
+    changed |= ensure_env_model(
+        provider,
         "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-    ] {
-        changed |= ensure_env_model(provider, key, model_names, preferred_claude_model);
-    }
+        model_names,
+        preferred_claude_haiku_model,
+    );
+    changed |= ensure_env_model(
+        provider,
+        "ANTHROPIC_DEFAULT_FABLE_MODEL",
+        model_names,
+        preferred_claude_fable_model,
+    );
+    changed |= set_model_catalog(provider, model_names);
     if let Some(model) = read_env_model(provider, "ANTHROPIC_MODEL") {
         defaults.push(("claude".to_string(), model));
     }
@@ -206,7 +229,7 @@ fn sync_codex_provider(
         }
     }
 
-    changed |= set_codex_model_catalog(provider, model_names);
+    changed |= set_model_catalog(provider, model_names);
     let api_format = if selected.to_lowercase().contains("gpt-5.5") {
         "openai_responses"
     } else {
@@ -283,8 +306,24 @@ fn select_existing_or_preferred(
 }
 
 fn preferred_claude_model(model_names: &[String]) -> Option<String> {
-    find_first_containing(model_names, &["claude", "sonnet"])
+    preferred_claude_sonnet_model(model_names)
         .or_else(|| find_first_containing(model_names, &["claude"]))
+}
+
+fn preferred_claude_opus_model(model_names: &[String]) -> Option<String> {
+    find_first_containing(model_names, &["claude", "opus"])
+}
+
+fn preferred_claude_sonnet_model(model_names: &[String]) -> Option<String> {
+    find_first_containing(model_names, &["claude", "sonnet"])
+}
+
+fn preferred_claude_haiku_model(model_names: &[String]) -> Option<String> {
+    find_first_containing(model_names, &["claude", "haiku"])
+}
+
+fn preferred_claude_fable_model(model_names: &[String]) -> Option<String> {
+    find_first_containing(model_names, &["claude", "fable"])
 }
 
 fn preferred_codex_model(model_names: &[String]) -> Option<String> {
@@ -307,7 +346,7 @@ fn find_first_containing(model_names: &[String], needles: &[&str]) -> Option<Str
         .cloned()
 }
 
-fn set_codex_model_catalog(provider: &mut Provider, model_names: &[String]) -> bool {
+fn set_model_catalog(provider: &mut Provider, model_names: &[String]) -> bool {
     let models: Vec<Value> = model_names
         .iter()
         .map(|model| {
@@ -391,5 +430,53 @@ mod tests {
         let filtered = chat_capable_models(&models);
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].model_name, "text-model");
+    }
+
+    #[test]
+    fn sync_claude_provider_writes_catalog_and_fable_route() {
+        let mut provider = Provider::with_id(
+            "matpool-claude".to_string(),
+            "Matpool".to_string(),
+            json!({
+                "env": {
+                    "ANTHROPIC_MODEL": "claude-sonnet-4-6",
+                    "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-4-6"
+                }
+            }),
+            None,
+        );
+        let models = vec![
+            "Claude-Opus-4.8".to_string(),
+            "Claude-Fable-5".to_string(),
+            "Claude-Sonnet-5".to_string(),
+            "Claude-Haiku-4.5".to_string(),
+            "GLM-5.2".to_string(),
+        ];
+        let mut defaults = Vec::new();
+
+        assert!(sync_claude_provider(&mut provider, &models, &mut defaults));
+
+        let env = provider.settings_config["env"].as_object().expect("env");
+        assert_eq!(
+            env["ANTHROPIC_DEFAULT_SONNET_MODEL"],
+            Value::String("Claude-Sonnet-5".to_string())
+        );
+        assert_eq!(
+            env["ANTHROPIC_DEFAULT_FABLE_MODEL"],
+            Value::String("Claude-Fable-5".to_string())
+        );
+        let catalog_models = provider.settings_config["modelCatalog"]["models"]
+            .as_array()
+            .expect("catalog models");
+        assert!(
+            catalog_models
+                .iter()
+                .any(|entry| entry["model"] == Value::String("Claude-Sonnet-5".to_string()))
+        );
+        assert!(
+            catalog_models
+                .iter()
+                .any(|entry| entry["model"] == Value::String("Claude-Fable-5".to_string()))
+        );
     }
 }
