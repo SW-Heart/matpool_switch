@@ -546,8 +546,7 @@ fn daemon_install() -> CliResult {
 
     let task_xml_path = windows_task_xml_path();
     let task_xml = windows_task_xml(&script_path);
-    fs::write(&task_xml_path, task_xml)
-        .map_err(|e| format!("failed to write Windows scheduled task XML: {e}"))?;
+    write_windows_task_xml(&task_xml_path, &task_xml)?;
 
     let task_xml_arg = task_xml_path.to_string_lossy().to_string();
     run_schtasks(&[
@@ -1078,6 +1077,16 @@ fn windows_task_xml_path() -> PathBuf {
 }
 
 #[cfg(target_os = "windows")]
+fn write_windows_task_xml(path: &std::path::Path, xml: &str) -> CliResult {
+    let mut bytes = Vec::with_capacity(2 + xml.len() * 2);
+    bytes.extend_from_slice(&[0xFF, 0xFE]);
+    for unit in xml.encode_utf16() {
+        bytes.extend_from_slice(&unit.to_le_bytes());
+    }
+    fs::write(path, bytes).map_err(|e| format!("failed to write Windows scheduled task XML: {e}"))
+}
+
+#[cfg(target_os = "windows")]
 fn windows_daemon_script_path() -> PathBuf {
     get_app_config_dir().join("daemon-launcher.vbs")
 }
@@ -1125,7 +1134,7 @@ fn windows_task_xml(script_path: &std::path::Path) -> String {
         .unwrap_or_default();
 
     format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
+        r#"<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
     <Description>Matpool Switch local proxy daemon</Description>

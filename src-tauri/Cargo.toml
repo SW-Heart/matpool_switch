@@ -1,6 +1,6 @@
 [package]
 name = "matpool-switch"
-version = "0.1.3"
+version = "0.1.4"
 description = "Matpool 一键接管 Vibe Coding CLI 工具流量的桌面客户端"
 authors = ["Matpool"]
 license = "MIT"
