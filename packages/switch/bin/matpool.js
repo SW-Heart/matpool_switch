@@ -55,8 +55,10 @@ function resolveBinary() {
 }
 
 function updateSelf() {
-  const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+  const npmCommand = 'npm';
   const result = spawnSync(npmCommand, ['install', '-g', '@mtswitch/switch@latest'], {
+    env: process.env,
+    shell: process.platform === 'win32',
     stdio: 'inherit'
   });
 

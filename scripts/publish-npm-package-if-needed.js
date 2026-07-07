@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process'
 const packageJsonPath = path.join(process.cwd(), 'package.json')
 const pkg = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'))
 const spec = `${pkg.name}@${pkg.version}`
-const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+const npmCommand = 'npm'
 
 function run(command, args, options = {}) {
   return spawnSync(command, args, {
