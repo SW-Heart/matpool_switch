@@ -67,8 +67,9 @@ pub(crate) const OFFICIAL_SEEDS: &[OfficialProviderSeed] = &[
         website_url: "https://matpool.com",
         icon: "generic",
         icon_color: "#1F6FEB",
-        // 4 档模型：主模型 + /model opus|sonnet|haiku 三档
-        settings_config_json: r#"{"env":{"ANTHROPIC_BASE_URL":"https://token.matpool.com","ANTHROPIC_AUTH_TOKEN":"","ANTHROPIC_MODEL":"claude-sonnet-4-6","ANTHROPIC_DEFAULT_OPUS_MODEL":"claude-opus-4-6","ANTHROPIC_DEFAULT_SONNET_MODEL":"claude-sonnet-4-6","ANTHROPIC_DEFAULT_HAIKU_MODEL":"claude-haiku-4-5"}}"#,
+        // 主模型 + /model opus|sonnet|haiku|fable 槽位；完整模型目录会在 setup/status
+        // 时从 Matpool pricing 动态同步，seed 只放一份可用兜底。
+        settings_config_json: r#"{"env":{"ANTHROPIC_BASE_URL":"https://token.matpool.com","ANTHROPIC_AUTH_TOKEN":"","ANTHROPIC_MODEL":"Claude-Sonnet-5","ANTHROPIC_DEFAULT_OPUS_MODEL":"Claude-Opus-4.8","ANTHROPIC_DEFAULT_SONNET_MODEL":"Claude-Sonnet-5","ANTHROPIC_DEFAULT_HAIKU_MODEL":"Claude-Sonnet-4.6","ANTHROPIC_DEFAULT_FABLE_MODEL":"Claude-Fable-5"},"modelCatalog":{"models":[{"model":"Claude-Sonnet-5","displayName":"Claude-Sonnet-5","display_name":"Claude-Sonnet-5","contextWindow":128000,"context_window":128000},{"model":"Claude-Fable-5","displayName":"Claude-Fable-5","display_name":"Claude-Fable-5","contextWindow":128000,"context_window":128000},{"model":"Claude-Opus-4.8","displayName":"Claude-Opus-4.8","display_name":"Claude-Opus-4.8","contextWindow":128000,"context_window":128000},{"model":"GLM-5.2","displayName":"GLM-5.2","display_name":"GLM-5.2","contextWindow":128000,"context_window":128000},{"model":"GPT-5.5","displayName":"GPT-5.5","display_name":"GPT-5.5","contextWindow":128000,"context_window":128000}]}}"#,
         api_format: Some("anthropic"),
     },
     OfficialProviderSeed {

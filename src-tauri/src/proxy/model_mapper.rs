@@ -5,6 +5,7 @@
 use crate::claude_desktop_config::ONE_M_CONTEXT_MARKER;
 use crate::provider::Provider;
 use serde_json::Value;
+use std::collections::HashSet;
 
 /// 模型映射配置
 pub struct ModelMapping {
@@ -13,6 +14,7 @@ pub struct ModelMapping {
     pub opus_model: Option<String>,
     pub fable_model: Option<String>,
     pub default_model: Option<String>,
+    pub catalog_models: HashSet<String>,
 }
 
 impl ModelMapping {
@@ -46,6 +48,7 @@ impl ModelMapping {
                 .and_then(|v| v.as_str())
                 .filter(|s| !s.is_empty())
                 .map(String::from),
+            catalog_models: catalog_model_ids(provider),
         }
     }
 
@@ -61,6 +64,10 @@ impl ModelMapping {
     /// 根据原始模型名称获取映射后的模型
     pub fn map_model(&self, original_model: &str) -> String {
         let model_lower = original_model.to_lowercase();
+
+        if self.catalog_models.contains(&model_lower) {
+            return original_model.to_string();
+        }
 
         // 1. 按模型类型匹配
         if model_lower.contains("fable") {
@@ -97,6 +104,26 @@ impl ModelMapping {
         // 3. 无映射，保持原样
         original_model.to_string()
     }
+}
+
+fn catalog_model_ids(provider: &Provider) -> HashSet<String> {
+    provider
+        .settings_config
+        .get("modelCatalog")
+        .and_then(|catalog| catalog.get("models"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            entry
+                .get("model")
+                .or_else(|| entry.get("id"))
+                .and_then(Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect()
 }
 
 /// 对请求体应用模型映射
@@ -325,6 +352,33 @@ mod tests {
         let (result, _, mapped) = apply_model_mapping(body, &provider);
         assert_eq!(result["model"], "default-model");
         assert_eq!(mapped, Some("default-model".to_string()));
+    }
+
+    #[test]
+    fn test_catalog_model_passthrough_even_with_default_mapping() {
+        let mut provider = create_provider_with_mapping();
+        provider.settings_config["modelCatalog"] = json!({
+            "models": [
+                { "model": "Claude-Sonnet-5" },
+                { "model": "Claude-Fable-5" },
+                { "model": "GLM-5.2" }
+            ]
+        });
+
+        let body = json!({"model": "Claude-Sonnet-5"});
+        let (result, _, mapped) = apply_model_mapping(body, &provider);
+        assert_eq!(result["model"], "Claude-Sonnet-5");
+        assert!(mapped.is_none());
+
+        let body = json!({"model": "claude-fable-5"});
+        let (result, _, mapped) = apply_model_mapping(body, &provider);
+        assert_eq!(result["model"], "claude-fable-5");
+        assert!(mapped.is_none());
+
+        let body = json!({"model": "GLM-5.2"});
+        let (result, _, mapped) = apply_model_mapping(body, &provider);
+        assert_eq!(result["model"], "GLM-5.2");
+        assert!(mapped.is_none());
     }
 
     #[test]

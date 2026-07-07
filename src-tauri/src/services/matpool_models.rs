@@ -4,6 +4,8 @@
 //! as the product-level model catalog, then projects chat-capable models into
 //! Matpool seed providers. Keep the CLI on the same source of truth.
 
+#![allow(dead_code)]
+
 use crate::app_config::AppType;
 use crate::database::Database;
 use crate::provider::Provider;
@@ -76,24 +78,36 @@ pub fn chat_capable_models(models: &[MatpoolPricingModel]) -> Vec<MatpoolPricing
         .collect()
 }
 
+pub fn model_catalog_from_model_names(model_names: &[String]) -> Value {
+    let models: Vec<Value> = model_names
+        .iter()
+        .map(|model| {
+            json!({
+                "model": model,
+                "displayName": model,
+                "display_name": model,
+                "contextWindow": CODEX_DEFAULT_CONTEXT_WINDOW,
+                "context_window": CODEX_DEFAULT_CONTEXT_WINDOW,
+            })
+        })
+        .collect();
+    json!({ "models": models })
+}
+
+pub async fn fetch_matpool_chat_model_catalog() -> Result<Value, String> {
+    let all_models = fetch_matpool_pricing_models().await?;
+    let chat_models = chat_capable_models(&all_models);
+    let model_names = matpool_model_names(&chat_models)?;
+    Ok(model_catalog_from_model_names(&model_names))
+}
+
 pub async fn sync_matpool_models_for_apps(
     db: &Database,
     apps: &[AppType],
 ) -> Result<MatpoolModelSyncOutcome, String> {
     let all_models = fetch_matpool_pricing_models().await?;
     let chat_models = chat_capable_models(&all_models);
-    if chat_models.is_empty() {
-        return Err("Matpool pricing returned no TEXT/CODE models".to_string());
-    }
-
-    let model_names: Vec<String> = chat_models
-        .iter()
-        .map(|model| model.model_name.trim().to_string())
-        .filter(|model| !model.is_empty())
-        .collect();
-    if model_names.is_empty() {
-        return Err("Matpool pricing returned empty model names".to_string());
-    }
+    let model_names = matpool_model_names(&chat_models)?;
 
     let mut updated = Vec::new();
     let mut defaults = Vec::new();
@@ -347,17 +361,7 @@ fn find_first_containing(model_names: &[String], needles: &[&str]) -> Option<Str
 }
 
 fn set_model_catalog(provider: &mut Provider, model_names: &[String]) -> bool {
-    let models: Vec<Value> = model_names
-        .iter()
-        .map(|model| {
-            json!({
-                "model": model,
-                "display_name": model,
-                "context_window": CODEX_DEFAULT_CONTEXT_WINDOW,
-            })
-        })
-        .collect();
-    let catalog = json!({ "models": models });
+    let catalog = model_catalog_from_model_names(model_names);
     if provider.settings_config.get("modelCatalog") == Some(&catalog) {
         return false;
     }
@@ -384,6 +388,22 @@ fn ensure_settings_object(value: &mut Value) -> &mut serde_json::Map<String, Val
     value
         .as_object_mut()
         .expect("settings object just initialized")
+}
+
+fn matpool_model_names(models: &[MatpoolPricingModel]) -> Result<Vec<String>, String> {
+    if models.is_empty() {
+        return Err("Matpool pricing returned no TEXT/CODE models".to_string());
+    }
+
+    let model_names: Vec<String> = models
+        .iter()
+        .map(|model| model.model_name.trim().to_string())
+        .filter(|model| !model.is_empty())
+        .collect();
+    if model_names.is_empty() {
+        return Err("Matpool pricing returned empty model names".to_string());
+    }
+    Ok(model_names)
 }
 
 fn truncate(input: &str, max_chars: usize) -> String {

@@ -74,6 +74,18 @@ pub async fn get_status(State(state): State<ProxyState>) -> Result<Json<ProxySta
 /// 获取模型列表（OpenAI 风格），也按 Anthropic `/v1/models` 格式响应。
 pub async fn handle_models(State(state): State<ProxyState>) -> Result<Json<Value>, ProxyError> {
     if let Ok(providers) = state.provider_router.select_providers("claude").await {
+        if providers
+            .first()
+            .is_some_and(|provider| provider.id == "matpool-claude")
+        {
+            match crate::services::matpool_models::fetch_matpool_chat_model_catalog().await {
+                Ok(catalog) => return Ok(Json(catalog)),
+                Err(err) => {
+                    log::warn!("[models] failed to refresh Matpool model catalog: {err}");
+                }
+            }
+        }
+
         if let Some(catalog) = providers
             .first()
             .and_then(|provider| provider.settings_config.get("modelCatalog"))

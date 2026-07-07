@@ -64,6 +64,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use store::AppState;
 #[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+#[cfg(target_os = "windows")]
 use winreg::{enums::*, RegKey};
 
 type CliResult<T = ()> = Result<T, String>;
@@ -488,6 +490,9 @@ const WINDOWS_TASK_NAME: &str = r"\MatpoolSwitchDaemon";
 #[cfg(target_os = "windows")]
 const WINDOWS_RUN_VALUE_NAME: &str = "MatpoolSwitchDaemon";
 
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 #[cfg(target_os = "macos")]
 fn daemon_install() -> CliResult {
     let plist_path = macos_launch_agent_plist_path()?;
@@ -534,28 +539,28 @@ fn daemon_install() -> CliResult {
     let log_dir = get_app_config_dir().join("logs");
     fs::create_dir_all(&log_dir).map_err(|e| format!("failed to create log dir: {e}"))?;
     let exe = env::current_exe().map_err(|e| format!("failed to resolve current exe: {e}"))?;
-    let task_command = windows_task_command(&exe, &log_dir);
+    let script_path = windows_daemon_script_path();
+    let script = windows_daemon_script(&exe, &log_dir);
+    fs::write(&script_path, script)
+        .map_err(|e| format!("failed to write Windows daemon launcher script: {e}"))?;
 
+    let task_xml_path = windows_task_xml_path();
+    let task_xml = windows_task_xml(&script_path);
+    fs::write(&task_xml_path, task_xml)
+        .map_err(|e| format!("failed to write Windows scheduled task XML: {e}"))?;
+
+    let task_xml_arg = task_xml_path.to_string_lossy().to_string();
     run_schtasks(&[
         "/Create",
         "/TN",
         WINDOWS_TASK_NAME,
-        "/SC",
-        "ONCE",
-        "/ST",
-        "00:00",
-        "/RL",
-        "LIMITED",
+        "/XML",
+        &task_xml_arg,
         "/F",
-        "/TR",
-        &task_command,
     ])?;
-    windows_install_run_key()?;
+    let _ = windows_delete_run_key();
 
-    println!("Installed Windows scheduled task: {WINDOWS_TASK_NAME}");
-    println!(
-        "Installed user login launcher: HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\{WINDOWS_RUN_VALUE_NAME}"
-    );
+    println!("Installed hidden Windows scheduled task: {WINDOWS_TASK_NAME}");
     println!("Run: matpool daemon start");
     Ok(())
 }
@@ -641,6 +646,7 @@ fn daemon_stop_service() -> CliResult {
 fn daemon_stop_service() -> CliResult {
     let _ = Command::new("schtasks.exe")
         .args(["/End", "/TN", WINDOWS_TASK_NAME])
+        .creation_flags(CREATE_NO_WINDOW)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
@@ -699,15 +705,20 @@ fn daemon_uninstall() -> CliResult {
     windows_delete_run_key()?;
     let output = Command::new("schtasks.exe")
         .args(["/Delete", "/TN", WINDOWS_TASK_NAME, "/F"])
+        .creation_flags(CREATE_NO_WINDOW)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
         .map_err(|e| format!("failed to run schtasks.exe /Delete: {e}"))?;
     if output.status.success() {
         println!("Removed Windows scheduled task: {WINDOWS_TASK_NAME}");
+        let _ = fs::remove_file(windows_task_xml_path());
+        let _ = fs::remove_file(windows_daemon_script_path());
         Ok(())
     } else if !windows_task_exists() {
         println!("Windows scheduled task is not installed.");
+        let _ = fs::remove_file(windows_task_xml_path());
+        let _ = fs::remove_file(windows_daemon_script_path());
         Ok(())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -786,7 +797,7 @@ fn macos_launch_agent_plist(exe: &std::path::Path, log_dir: &std::path::Path) ->
     )
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn xml_escape(value: &str) -> String {
     value
         .replace('&', "&amp;")
@@ -910,6 +921,7 @@ fn run_systemctl_user(args: &[&str]) -> CliResult {
 fn run_schtasks(args: &[&str]) -> CliResult {
     let output = Command::new("schtasks.exe")
         .args(args)
+        .creation_flags(CREATE_NO_WINDOW)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
@@ -935,14 +947,6 @@ fn windows_run_key() -> CliResult<RegKey> {
         .create_subkey(r"Software\Microsoft\Windows\CurrentVersion\Run")
         .map_err(|e| format!("failed to open HKCU Run key: {e}"))?;
     Ok(key)
-}
-
-#[cfg(target_os = "windows")]
-fn windows_install_run_key() -> CliResult {
-    let command = format!(r#"schtasks.exe /Run /TN {}"#, WINDOWS_TASK_NAME);
-    windows_run_key()?
-        .set_value(WINDOWS_RUN_VALUE_NAME, &command)
-        .map_err(|e| format!("failed to write HKCU Run key: {e}"))
 }
 
 #[cfg(target_os = "windows")]
@@ -1015,6 +1019,7 @@ fn windows_kill_daemon_pid() -> CliResult<bool> {
 
     let output = Command::new("taskkill.exe")
         .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .creation_flags(CREATE_NO_WINDOW)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
@@ -1038,6 +1043,7 @@ fn windows_pid_is_matpool(pid: u32) -> CliResult<bool> {
     let filter = format!("PID eq {pid}");
     let output = Command::new("tasklist.exe")
         .args(["/FI", &filter, "/FO", "CSV", "/NH"])
+        .creation_flags(CREATE_NO_WINDOW)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
@@ -1058,6 +1064,7 @@ fn windows_pid_is_matpool(pid: u32) -> CliResult<bool> {
 fn windows_task_exists() -> bool {
     Command::new("schtasks.exe")
         .args(["/Query", "/TN", WINDOWS_TASK_NAME])
+        .creation_flags(CREATE_NO_WINDOW)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
@@ -1066,14 +1073,97 @@ fn windows_task_exists() -> bool {
 }
 
 #[cfg(target_os = "windows")]
-fn windows_task_command(exe: &std::path::Path, log_dir: &std::path::Path) -> String {
-    let stdout = log_dir.join("daemon.out.log");
-    let stderr = log_dir.join("daemon.err.log");
-    format!(
-        "cmd.exe /C \"\"{}\" daemon run >> \"{}\" 2>> \"{}\"\"",
+fn windows_task_xml_path() -> PathBuf {
+    get_app_config_dir().join("daemon-task.xml")
+}
+
+#[cfg(target_os = "windows")]
+fn windows_daemon_script_path() -> PathBuf {
+    get_app_config_dir().join("daemon-launcher.vbs")
+}
+
+#[cfg(target_os = "windows")]
+fn vbs_escape(value: &str) -> String {
+    value.replace('"', "\"\"")
+}
+
+#[cfg(target_os = "windows")]
+fn windows_daemon_script(exe: &std::path::Path, log_dir: &std::path::Path) -> String {
+    let working_dir = vbs_escape(&get_app_config_dir().to_string_lossy());
+    let command = vbs_escape(&format!(
+        r#"cmd.exe /D /C ""{}" daemon run >> "{}" 2>> "{}"""#,
         exe.display(),
-        stdout.display(),
-        stderr.display()
+        log_dir.join("daemon.out.log").display(),
+        log_dir.join("daemon.err.log").display()
+    ));
+
+    format!(
+        r#"Option Explicit
+Dim shell
+Set shell = CreateObject("WScript.Shell")
+shell.CurrentDirectory = "{working_dir}"
+shell.Run "{command}", 0, True
+"#
+    )
+}
+
+#[cfg(target_os = "windows")]
+fn windows_task_user_id() -> Option<String> {
+    let username = env::var("USERNAME").ok().filter(|value| !value.is_empty())?;
+    match env::var("USERDOMAIN").ok().filter(|value| !value.is_empty()) {
+        Some(domain) => Some(format!(r"{domain}\{username}")),
+        None => Some(username),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_task_xml(script_path: &std::path::Path) -> String {
+    let working_dir = xml_escape(&get_app_config_dir().to_string_lossy());
+    let args = xml_escape(&format!(r#""{}""#, script_path.display()));
+    let user_id = windows_task_user_id()
+        .map(|value| format!("\n      <UserId>{}</UserId>", xml_escape(&value)))
+        .unwrap_or_default();
+
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Matpool Switch local proxy daemon</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">{user_id}
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <Enabled>true</Enabled>
+    <Hidden>true</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <WakeToRun>false</WakeToRun>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>7</Priority>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>wscript.exe</Command>
+      <Arguments>{args}</Arguments>
+      <WorkingDirectory>{working_dir}</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>
+"#
     )
 }
 

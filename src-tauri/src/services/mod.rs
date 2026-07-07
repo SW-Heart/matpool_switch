@@ -6,6 +6,7 @@ pub mod env_checker;
 pub mod env_manager;
 pub mod matpool_inject;
 pub mod mcp;
+pub mod matpool_models;
 pub mod model_fetch;
 pub mod omo;
 pub mod prompt;
