@@ -8,12 +8,11 @@
 //! - Claude 的格式转换逻辑保留在此文件（用于 OpenRouter 旧接口回退）
 
 use super::{
-    ProxyError,
     error_mapper::{get_error_message, map_proxy_error_to_status},
     forwarder::ActiveConnectionGuard,
     handler_config::{
-        CLAUDE_PARSER_CONFIG, CODEX_PARSER_CONFIG, GEMINI_PARSER_CONFIG, OPENAI_PARSER_CONFIG,
-        claude_stream_usage_event_filter, codex_stream_usage_event_filter,
+        claude_stream_usage_event_filter, codex_stream_usage_event_filter, CLAUDE_PARSER_CONFIG,
+        CODEX_PARSER_CONFIG, GEMINI_PARSER_CONFIG, OPENAI_PARSER_CONFIG,
     },
     handler_context::RequestContext,
     providers::{
@@ -26,21 +25,22 @@ use super::{
         transform_codex_chat, transform_gemini, transform_responses,
     },
     response_processor::{
-        SseUsageCollector, create_logged_passthrough_stream, process_response, read_decoded_body,
+        create_logged_passthrough_stream, process_response, read_decoded_body,
         strip_entity_headers_for_rebuilt_body, strip_hop_by_hop_response_headers,
-        usage_logging_enabled,
+        usage_logging_enabled, SseUsageCollector,
     },
     server::ProxyState,
     sse::{strip_sse_field, take_sse_block},
     types::*,
     usage::parser::TokenUsage,
+    ProxyError,
 };
 use crate::app_config::AppType;
 use crate::database::PRICING_SOURCE_REQUEST;
-use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
+use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use bytes::Bytes;
 use http_body_util::BodyExt;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 // ============================================================================
 // 健康检查和状态查询（简单端点）
@@ -482,16 +482,22 @@ async fn handle_claude_transform(
                 } else {
                     chat_sse_to_response_value(&body_str)
                 };
-                // 聚合也失败时：保留全量 body 服务端日志，并给客户端错误附带同款
+                // 聚合也失败时：保留脱敏 body 摘要，并给客户端错误附带同款
                 // 现场诊断（content-type/body 摘要），否则命中嗅探臂的用户只拿到
                 // 裸聚合错误、丢失非嗅探臂已有的诊断增强（C7）
                 aggregated.map_err(|e| {
-                    log::error!("[Claude] SSE 聚合兜底失败: {e}, body: {body_str}");
+                    log::error!(
+                        "[Claude] SSE 聚合兜底失败: {e}, body: {}",
+                        body_for_log(&body_str)
+                    );
                     aggregate_fallback_error(e, &response_headers, &body_str)
                 })?
             }
             Err(e) => {
-                log::error!("[Claude] 解析上游响应失败: {e}, body: {body_str}");
+                log::error!(
+                    "[Claude] 解析上游响应失败: {e}, body: {}",
+                    body_for_log(&body_str)
+                );
                 return Err(upstream_body_parse_error(
                     "Failed to parse upstream response",
                     &e,
@@ -975,14 +981,20 @@ async fn handle_codex_chat_to_responses_transform(
         // 上游对 stream:false 返回未标记 Content-Type 的 SSE 体时按 SSE 聚合。
         Err(_) if body_looks_like_sse(&body_str) => {
             log::warn!("[Codex] 上游对非流请求返回未标记的 SSE 体，按 Chat SSE 聚合兜底");
-            // 聚合也失败时：保留全量 body 服务端日志，并给客户端错误附带现场诊断（C7）
+            // 聚合也失败时：保留脱敏 body 摘要，并给客户端错误附带现场诊断（C7）
             chat_sse_to_response_value(&body_str).map_err(|e| {
-                log::error!("[Codex] SSE 聚合兜底失败: {e}, body: {body_str}");
+                log::error!(
+                    "[Codex] SSE 聚合兜底失败: {e}, body: {}",
+                    body_for_log(&body_str)
+                );
                 aggregate_fallback_error(e, &response_headers, &body_str)
             })?
         }
         Err(e) => {
-            log::error!("[Codex] 解析 Chat 上游响应失败: {e}, body: {body_str}");
+            log::error!(
+                "[Codex] 解析 Chat 上游响应失败: {e}, body: {}",
+                body_for_log(&body_str)
+            );
             return Err(upstream_body_parse_error(
                 "Failed to parse upstream chat response",
                 &e,
@@ -1112,7 +1124,10 @@ async fn handle_codex_chat_error_response(
             } else {
                 lossy.into_owned()
             };
-            log::warn!("[Codex] Chat 错误响应不是合法 JSON，按文本透传: {truncated}");
+            log::warn!(
+                "[Codex] Chat 错误响应不是合法 JSON，按文本透传: {}",
+                body_for_log(&truncated)
+            );
             Value::String(truncated)
         }
     };
@@ -1331,6 +1346,62 @@ fn compact_error_message(message: &str, max_chars: usize) -> String {
         .trim_end()
         .to_string();
     format!("{truncated}…(truncated)")
+}
+
+const BODY_LOG_MAX_CHARS: usize = 2048;
+
+fn body_for_log(body: &str) -> String {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    if let Ok(mut json) = serde_json::from_str::<Value>(trimmed) {
+        redact_sensitive_json_value(&mut json);
+        return body_snippet(&json.to_string(), BODY_LOG_MAX_CHARS);
+    }
+
+    body_snippet(body, BODY_LOG_MAX_CHARS)
+}
+
+fn redact_sensitive_json_value(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map.iter_mut() {
+                if is_sensitive_json_key(key) {
+                    *child = Value::String("<redacted>".to_string());
+                } else {
+                    redact_sensitive_json_value(child);
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                redact_sensitive_json_value(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn is_sensitive_json_key(key: &str) -> bool {
+    matches!(
+        key.to_ascii_lowercase().as_str(),
+        "api_key"
+            | "apikey"
+            | "api-key"
+            | "access_token"
+            | "refresh_token"
+            | "id_token"
+            | "auth_token"
+            | "authorization"
+            | "client_secret"
+            | "secret"
+            | "password"
+            | "credential"
+            | "credentials"
+            | "token"
+    )
 }
 
 // ============================================================================
@@ -2055,9 +2126,9 @@ async fn log_usage(
 #[cfg(test)]
 mod tests {
     use super::{
-        body_looks_like_sse, body_snippet, chat_sse_to_response_value, codex_proxy_error_json,
-        responses_sse_to_response_value, should_use_claude_transform_streaming, transform,
-        upstream_body_parse_error,
+        body_for_log, body_looks_like_sse, body_snippet, chat_sse_to_response_value,
+        codex_proxy_error_json, responses_sse_to_response_value,
+        should_use_claude_transform_streaming, transform, upstream_body_parse_error,
     };
     use crate::proxy::ProxyError;
 
@@ -2269,6 +2340,29 @@ data: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant
         let snippet = body_snippet(&long, 120);
         assert_eq!(snippet.chars().count(), 121); // 120 个字符 + 省略号
         assert!(snippet.ends_with('…'));
+    }
+
+    #[test]
+    fn body_for_log_redacts_nested_json_secrets() {
+        let logged = body_for_log(
+            r#"{"error":"bad","auth":{"access_token":"ya29.secret","api_key":"sk-secret"},"items":[{"refresh_token":"rt-secret"}]}"#,
+        );
+
+        assert!(logged.contains(r#""access_token":"<redacted>""#));
+        assert!(logged.contains(r#""api_key":"<redacted>""#));
+        assert!(logged.contains(r#""refresh_token":"<redacted>""#));
+        assert!(!logged.contains("ya29.secret"));
+        assert!(!logged.contains("sk-secret"));
+        assert!(!logged.contains("rt-secret"));
+    }
+
+    #[test]
+    fn body_for_log_truncates_large_non_json_bodies() {
+        let body = "x".repeat(2050);
+        let logged = body_for_log(&body);
+
+        assert_eq!(logged.chars().count(), 2049);
+        assert!(logged.ends_with('…'));
     }
 
     #[test]

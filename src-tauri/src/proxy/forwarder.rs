@@ -42,6 +42,7 @@ type DesktopAppHandle = tauri::AppHandle;
 type DesktopAppHandle = ();
 
 const PROXY_AUTH_PLACEHOLDER: &str = "PROXY_MANAGED";
+const JSON_BODY_LOG_MAX_CHARS: usize = 2048;
 
 #[cfg(not(feature = "desktop"))]
 static HEADLESS_COPILOT_AUTH: OnceLock<Arc<RwLock<CopilotAuthManager>>> = OnceLock::new();
@@ -1991,13 +1992,14 @@ impl RequestForwarder {
             .get("model")
             .and_then(|v| v.as_str())
             .unwrap_or("<none>");
-        log::info!("[{tag}] >>> 请求 URL: {url} (model={request_model})");
+        let safe_url = redact_url_for_log(&url);
+        log::info!("[{tag}] >>> 请求 URL: {safe_url} (model={request_model})");
         if log::log_enabled!(log::Level::Debug) {
             if let Ok(body_str) = serde_json::to_string(&filtered_body) {
                 log::debug!(
                     "[{tag}] >>> 请求体内容 ({}字节): {}",
                     body_str.len(),
-                    body_str
+                    json_body_for_log(&filtered_body)
                 );
             }
         }
@@ -2734,6 +2736,122 @@ fn summarize_text_for_log(text: &str, max_chars: usize) -> String {
     format!("{truncated}...")
 }
 
+fn redact_url_for_log(raw_url: &str) -> String {
+    let Ok(mut parsed) = url::Url::parse(raw_url) else {
+        return raw_url.to_string();
+    };
+
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        let _ = parsed.set_username("<redacted>");
+        let _ = parsed.set_password(Some("<redacted>"));
+    }
+
+    let query_pairs = parsed
+        .query_pairs()
+        .map(|(key, value)| {
+            let value = value.to_string();
+            if is_sensitive_query_key(&key) || looks_like_bearer_secret(&value) {
+                (key.to_string(), "<redacted>".to_string())
+            } else {
+                (key.to_string(), value)
+            }
+        })
+        .collect::<Vec<_>>();
+
+    if parsed.query().is_some() {
+        parsed.query_pairs_mut().clear().extend_pairs(query_pairs);
+    }
+
+    parsed.to_string()
+}
+
+fn is_sensitive_query_key(key: &str) -> bool {
+    let normalized = key.to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "key"
+            | "api_key"
+            | "apikey"
+            | "api-key"
+            | "access_token"
+            | "refresh_token"
+            | "id_token"
+            | "auth_token"
+            | "authorization"
+            | "client_secret"
+            | "secret"
+            | "password"
+            | "credential"
+            | "credentials"
+            | "token"
+    )
+}
+
+fn looks_like_bearer_secret(value: &str) -> bool {
+    value
+        .trim_start()
+        .get(..7)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("bearer "))
+}
+
+fn json_body_for_log(value: &Value) -> String {
+    let mut redacted = value.clone();
+    redact_sensitive_json_value(&mut redacted);
+    truncate_for_log(&redacted.to_string(), JSON_BODY_LOG_MAX_CHARS)
+}
+
+fn redact_sensitive_json_value(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map.iter_mut() {
+                if is_sensitive_json_key(key) {
+                    *child = Value::String("<redacted>".to_string());
+                } else {
+                    redact_sensitive_json_value(child);
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                redact_sensitive_json_value(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn is_sensitive_json_key(key: &str) -> bool {
+    matches!(
+        key.to_ascii_lowercase().as_str(),
+        "api_key"
+            | "apikey"
+            | "api-key"
+            | "access_token"
+            | "refresh_token"
+            | "id_token"
+            | "auth_token"
+            | "authorization"
+            | "client_secret"
+            | "secret"
+            | "password"
+            | "credential"
+            | "credentials"
+            | "token"
+    )
+}
+
+fn truncate_for_log(value: &str, max_chars: usize) -> String {
+    let mut out = String::new();
+    for (idx, ch) in value.chars().enumerate() {
+        if idx >= max_chars {
+            out.push('…');
+            return out;
+        }
+        out.push(ch);
+    }
+    out
+}
+
 fn prepare_upstream_request_body(request_body: Value) -> Value {
     canonicalize_value(filter_private_params_with_whitelist(request_body, &[]))
 }
@@ -2805,6 +2923,71 @@ mod tests {
     use std::collections::HashMap;
     use std::time::Duration;
 
+    #[test]
+    fn redact_url_for_log_masks_sensitive_query_values() {
+        let url = redact_url_for_log(
+            "https://generativelanguage.googleapis.com/v1beta/models?key=AIza-secret&alt=sse",
+        );
+
+        assert!(url.contains("key=%3Credacted%3E"));
+        assert!(url.contains("alt=sse"));
+        assert!(!url.contains("AIza-secret"));
+    }
+
+    #[test]
+    fn redact_url_for_log_masks_bearer_query_values() {
+        let url = redact_url_for_log(
+            "https://api.example.com/v1/messages?session=ok&auth=Bearer%20sk-secret",
+        );
+
+        assert!(url.contains("auth=%3Credacted%3E"));
+        assert!(url.contains("session=ok"));
+        assert!(!url.contains("sk-secret"));
+    }
+
+    #[test]
+    fn redact_url_for_log_masks_userinfo() {
+        let url = redact_url_for_log("https://user:pass@example.com/v1/messages");
+
+        assert!(url.starts_with("https://%3Credacted%3E:%3Credacted%3E@example.com/"));
+        assert!(!url.contains("user:pass"));
+    }
+
+    #[test]
+    fn json_body_for_log_redacts_nested_secrets() {
+        let body = json!({
+            "model": "gpt-5.5",
+            "auth": {
+                "access_token": "ya29.secret",
+                "api_key": "sk-secret"
+            },
+            "messages": [
+                { "role": "user", "content": "keep normal content" },
+                { "refresh_token": "rt-secret" }
+            ]
+        });
+
+        let logged = json_body_for_log(&body);
+
+        assert!(logged.contains("gpt-5.5"));
+        assert!(logged.contains("keep normal content"));
+        assert!(logged.contains(r#""access_token":"<redacted>""#));
+        assert!(logged.contains(r#""api_key":"<redacted>""#));
+        assert!(logged.contains(r#""refresh_token":"<redacted>""#));
+        assert!(!logged.contains("ya29.secret"));
+        assert!(!logged.contains("sk-secret"));
+        assert!(!logged.contains("rt-secret"));
+    }
+
+    #[test]
+    fn json_body_for_log_truncates_large_payloads() {
+        let body = json!({ "input": "x".repeat(JSON_BODY_LOG_MAX_CHARS + 100) });
+        let logged = json_body_for_log(&body);
+
+        assert_eq!(logged.chars().count(), JSON_BODY_LOG_MAX_CHARS + 1);
+        assert!(logged.ends_with('…'));
+    }
+
     fn test_provider_with_type(provider_type: Option<&str>) -> Provider {
         Provider {
             id: "provider-1".to_string(),
@@ -2835,9 +3018,11 @@ mod tests {
             router: Arc::new(ProviderRouter::new(db.clone())),
             status: Arc::new(RwLock::new(ProxyStatus::default())),
             current_providers: Arc::new(RwLock::new(HashMap::new())),
+            #[cfg(not(feature = "desktop"))]
             copilot_auth: headless_copilot_auth(),
             gemini_shadow: Arc::new(GeminiShadowStore::new()),
             codex_chat_history: Arc::new(CodexChatHistoryStore::default()),
+            #[cfg(not(feature = "desktop"))]
             codex_auth: headless_codex_auth(),
             failover_manager: Arc::new(FailoverSwitchManager::new(db)),
             app_handle: None,

@@ -3017,11 +3017,7 @@ mod tests {
             "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME",
             Some("claude-sonnet-4.6"),
         );
-        assert_env_str(
-            env,
-            "ANTHROPIC_DEFAULT_FABLE_MODEL",
-            Some("claude-fable-5"),
-        );
+        assert_env_str(env, "ANTHROPIC_DEFAULT_FABLE_MODEL", Some("claude-fable-5"));
         assert_env_str(
             env,
             "ANTHROPIC_DEFAULT_FABLE_MODEL_NAME",
@@ -3098,7 +3094,11 @@ mod tests {
         assert_env_str(env, "ANTHROPIC_DEFAULT_OPUS_MODEL", Some("claude-opus-4-8"));
         assert_env_str(env, "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME", Some("gpt-5.4"));
         assert_env_str(env, "ANTHROPIC_DEFAULT_FABLE_MODEL", Some("claude-fable-5"));
-        assert_env_str(env, "ANTHROPIC_DEFAULT_FABLE_MODEL_NAME", Some("gpt-5.4-pro"));
+        assert_env_str(
+            env,
+            "ANTHROPIC_DEFAULT_FABLE_MODEL_NAME",
+            Some("gpt-5.4-pro"),
+        );
         assert_env_str(env, "ANTHROPIC_API_KEY", Some(PROXY_TOKEN_PLACEHOLDER));
         assert_env_str(env, "ANTHROPIC_AUTH_TOKEN", Some(PROXY_TOKEN_PLACEHOLDER));
     }

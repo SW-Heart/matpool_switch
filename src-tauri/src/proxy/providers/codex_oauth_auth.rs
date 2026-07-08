@@ -807,36 +807,45 @@ impl CodexOAuthManager {
             .as_nanos();
         let tmp_path = parent.join(format!("{file_name}.tmp.{ts}"));
 
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let write_result = (|| -> Result<(), CodexOAuthError> {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
-            let mut file = fs::OpenOptions::new()
-                .create_new(true)
-                .write(true)
-                .mode(0o600)
-                .open(&tmp_path)?;
-            file.write_all(content.as_bytes())?;
-            file.flush()?;
+                let mut file = fs::OpenOptions::new()
+                    .create_new(true)
+                    .write(true)
+                    .mode(0o600)
+                    .open(&tmp_path)?;
+                file.write_all(content.as_bytes())?;
+                file.sync_all()?;
 
-            fs::rename(&tmp_path, &self.storage_path)?;
-            fs::set_permissions(&self.storage_path, fs::Permissions::from_mode(0o600))?;
-        }
-
-        #[cfg(windows)]
-        {
-            let mut file = fs::OpenOptions::new()
-                .create_new(true)
-                .write(true)
-                .open(&tmp_path)?;
-            file.write_all(content.as_bytes())?;
-            file.flush()?;
-
-            if self.storage_path.exists() {
-                let _ = fs::remove_file(&self.storage_path);
+                fs::rename(&tmp_path, &self.storage_path)?;
+                fs::set_permissions(&self.storage_path, fs::Permissions::from_mode(0o600))?;
             }
-            fs::rename(&tmp_path, &self.storage_path)?;
+
+            #[cfg(windows)]
+            {
+                let mut file = fs::OpenOptions::new()
+                    .create_new(true)
+                    .write(true)
+                    .open(&tmp_path)?;
+                file.write_all(content.as_bytes())?;
+                file.sync_all()?;
+
+                if self.storage_path.exists() {
+                    let _ = fs::remove_file(&self.storage_path);
+                }
+                fs::rename(&tmp_path, &self.storage_path)?;
+            }
+
+            Ok(())
+        })();
+
+        if write_result.is_err() {
+            let _ = fs::remove_file(&tmp_path);
         }
+        write_result?;
 
         Ok(())
     }
@@ -1101,6 +1110,28 @@ mod tests {
         let accounts = manager2.list_accounts().await;
         assert_eq!(accounts.len(), 1);
         assert_eq!(accounts[0].id, "acc-123");
+    }
+
+    #[test]
+    fn test_write_store_atomic_removes_temp_file_when_replace_fails() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = CodexOAuthManager::new(temp.path().to_path_buf());
+
+        std::fs::create_dir_all(&manager.storage_path).unwrap();
+
+        let result = manager.write_store_atomic("{}");
+
+        assert!(result.is_err());
+        let leaked_tmp = std::fs::read_dir(temp.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("codex_oauth_auth.json.tmp.")
+            });
+        assert!(!leaked_tmp);
     }
 
     #[tokio::test]

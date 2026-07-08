@@ -1,6 +1,7 @@
 use crate::deeplink::{
     import_mcp_from_deeplink, import_prompt_from_deeplink, import_provider_from_deeplink,
-    import_skill_from_deeplink, parse_deeplink_url, DeepLinkImportRequest,
+    import_skill_from_deeplink, parse_deeplink_url, redact_deeplink_url_for_log,
+    DeepLinkImportRequest,
 };
 use crate::store::AppState;
 use tauri::State;
@@ -8,7 +9,10 @@ use tauri::State;
 /// Parse a deep link URL and return the parsed request for frontend confirmation
 #[tauri::command]
 pub fn parse_deeplink(url: String) -> Result<DeepLinkImportRequest, String> {
-    log::info!("Parsing deep link URL: {url}");
+    log::info!(
+        "Parsing deep link URL: {}",
+        redact_deeplink_url_for_log(&url)
+    );
     parse_deeplink_url(&url).map_err(|e| e.to_string())
 }
 

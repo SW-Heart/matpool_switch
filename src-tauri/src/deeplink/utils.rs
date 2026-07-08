@@ -6,6 +6,59 @@ use crate::error::AppError;
 use base64::prelude::*;
 use url::Url;
 
+/// Redact secrets from a deep link before logging it.
+pub fn redact_deeplink_url_for_log(url_str: &str) -> String {
+    let Ok(mut url) = Url::parse(url_str) else {
+        return url_str.to_string();
+    };
+
+    let query_pairs = url
+        .query_pairs()
+        .map(|(key, value)| {
+            let value = value.to_string();
+            if is_sensitive_query_key(&key) || looks_like_bearer_secret(&value) {
+                (key.to_string(), "<redacted>".to_string())
+            } else {
+                (key.to_string(), value)
+            }
+        })
+        .collect::<Vec<_>>();
+
+    if url.query().is_some() {
+        url.query_pairs_mut().clear().extend_pairs(query_pairs);
+    }
+
+    url.to_string()
+}
+
+fn is_sensitive_query_key(key: &str) -> bool {
+    matches!(
+        key.to_ascii_lowercase().as_str(),
+        "apikey"
+            | "api_key"
+            | "api-key"
+            | "key"
+            | "token"
+            | "access_token"
+            | "refresh_token"
+            | "id_token"
+            | "auth_token"
+            | "authorization"
+            | "client_secret"
+            | "secret"
+            | "password"
+            | "credential"
+            | "credentials"
+    )
+}
+
+fn looks_like_bearer_secret(value: &str) -> bool {
+    value
+        .trim_start()
+        .get(..7)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("bearer "))
+}
+
 /// Validate that a string is a valid HTTP(S) URL
 pub fn validate_url(url_str: &str, field_name: &str) -> Result<(), AppError> {
     let url = Url::parse(url_str)
@@ -96,4 +149,30 @@ pub fn infer_homepage_from_endpoint(endpoint: &str) -> Option<String> {
         .unwrap_or(host);
 
     Some(format!("https://{clean_host}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn redact_deeplink_url_for_log_masks_api_key_query() {
+        let url = redact_deeplink_url_for_log(
+            "matpool://v1/import?resource=provider&app=claude&apiKey=sk-secret&name=Test",
+        );
+
+        assert!(url.contains("apiKey=%3Credacted%3E"));
+        assert!(url.contains("name=Test"));
+        assert!(!url.contains("sk-secret"));
+    }
+
+    #[test]
+    fn redact_deeplink_url_for_log_masks_bearer_query_value() {
+        let url = redact_deeplink_url_for_log(
+            "matpool://v1/import?resource=provider&token=Bearer%20sk-secret&name=Test",
+        );
+
+        assert!(url.contains("token=%3Credacted%3E"));
+        assert!(!url.contains("sk-secret"));
+    }
 }

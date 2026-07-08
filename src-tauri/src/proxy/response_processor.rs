@@ -28,6 +28,8 @@ use std::{
 };
 use tokio::sync::Mutex;
 
+const LOG_PAYLOAD_MAX_CHARS: usize = 2048;
+
 // ============================================================================
 // 响应解压
 // ============================================================================
@@ -278,7 +280,7 @@ pub async fn handle_non_streaming(
     log::debug!(
         "[{}] 上游响应体内容: {}",
         ctx.tag,
-        String::from_utf8_lossy(&body_bytes)
+        sanitize_log_payload(String::from_utf8_lossy(&body_bytes).as_ref())
     );
 
     // 解析并记录使用量。关闭 usage logging 时直接跳过，避免非流式响应整包 JSON parse。
@@ -813,9 +815,15 @@ pub fn create_logged_passthrough_stream(
                                                 _ => false,
                                             };
                                             if collected {
-                                                log::debug!("[{tag}] <<< SSE 事件: {data}");
+                                                log::debug!(
+                                                    "[{tag}] <<< SSE 事件: {}",
+                                                    sanitize_log_payload(data)
+                                                );
                                             } else {
-                                                log::debug!("[{tag}] <<< SSE 数据: {data}");
+                                                log::debug!(
+                                                    "[{tag}] <<< SSE 数据: {}",
+                                                    sanitize_log_payload(data)
+                                                );
                                             }
                                         } else {
                                             log::debug!("[{tag}] <<< SSE: [DONE]");
@@ -854,10 +862,102 @@ fn format_headers(headers: &HeaderMap) -> String {
         .iter()
         .map(|(key, value)| {
             let value_str = value.to_str().unwrap_or("<non-utf8>");
-            format!("{key}={value_str}")
+            if is_sensitive_header_name(key.as_str()) || looks_like_bearer_secret(value_str) {
+                format!("{key}=<redacted>")
+            } else {
+                format!("{key}={}", truncate_for_log(value_str))
+            }
         })
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+fn sanitize_log_payload(payload: &str) -> String {
+    let trimmed = payload.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    if let Ok(mut json) = serde_json::from_str::<Value>(trimmed) {
+        redact_json_value(&mut json);
+        return truncate_for_log(&json.to_string());
+    }
+
+    truncate_for_log(payload)
+}
+
+fn redact_json_value(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map.iter_mut() {
+                if is_sensitive_json_key(key) {
+                    *child = Value::String("<redacted>".to_string());
+                } else {
+                    redact_json_value(child);
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                redact_json_value(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn is_sensitive_header_name(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "authorization"
+            | "proxy-authorization"
+            | "x-api-key"
+            | "x-goog-api-key"
+            | "api-key"
+            | "openai-api-key"
+            | "anthropic-auth-token"
+            | "cookie"
+            | "set-cookie"
+    )
+}
+
+fn is_sensitive_json_key(key: &str) -> bool {
+    matches!(
+        key.to_ascii_lowercase().as_str(),
+        "api_key"
+            | "apikey"
+            | "api-key"
+            | "access_token"
+            | "refresh_token"
+            | "id_token"
+            | "auth_token"
+            | "authorization"
+            | "client_secret"
+            | "secret"
+            | "password"
+            | "credential"
+            | "credentials"
+            | "token"
+    )
+}
+
+fn looks_like_bearer_secret(value: &str) -> bool {
+    value
+        .trim_start()
+        .get(..7)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("bearer "))
+}
+
+fn truncate_for_log(value: &str) -> String {
+    let mut out = String::new();
+    for (idx, ch) in value.chars().enumerate() {
+        if idx >= LOG_PAYLOAD_MAX_CHARS {
+            out.push_str("…<truncated>");
+            return out;
+        }
+        out.push(ch);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -872,11 +972,58 @@ mod tests {
         codex_chat_history::CodexChatHistoryStore, gemini_shadow::GeminiShadowStore,
     };
     use crate::proxy::types::{ProxyConfig, ProxyStatus};
+    use axum::http::HeaderValue;
     use rust_decimal::Decimal;
     use std::collections::HashMap;
     use std::str::FromStr;
     use std::sync::Arc;
     use tokio::sync::RwLock;
+
+    #[test]
+    fn format_headers_redacts_sensitive_values() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer sk-secret"),
+        );
+        headers.insert("x-api-key", HeaderValue::from_static("sk-test"));
+        headers.insert("content-type", HeaderValue::from_static("application/json"));
+
+        let formatted = format_headers(&headers);
+
+        assert!(formatted.contains("authorization=<redacted>"));
+        assert!(formatted.contains("x-api-key=<redacted>"));
+        assert!(formatted.contains("content-type=application/json"));
+        assert!(!formatted.contains("sk-secret"));
+        assert!(!formatted.contains("sk-test"));
+    }
+
+    #[test]
+    fn sanitize_log_payload_redacts_nested_json_secrets() {
+        let sanitized = sanitize_log_payload(
+            r#"{"model":"claude-sonnet-4-6","auth":{"access_token":"ya29.secret","api_key":"sk-secret"},"items":[{"refresh_token":"rt-secret"}]}"#,
+        );
+
+        assert!(sanitized.contains("claude-sonnet-4-6"));
+        assert!(sanitized.contains(r#""access_token":"<redacted>""#));
+        assert!(sanitized.contains(r#""api_key":"<redacted>""#));
+        assert!(sanitized.contains(r#""refresh_token":"<redacted>""#));
+        assert!(!sanitized.contains("ya29.secret"));
+        assert!(!sanitized.contains("sk-secret"));
+        assert!(!sanitized.contains("rt-secret"));
+    }
+
+    #[test]
+    fn sanitize_log_payload_truncates_large_non_json_payloads() {
+        let payload = "x".repeat(LOG_PAYLOAD_MAX_CHARS + 10);
+        let sanitized = sanitize_log_payload(&payload);
+
+        assert_eq!(
+            sanitized.chars().count(),
+            LOG_PAYLOAD_MAX_CHARS + "…<truncated>".chars().count()
+        );
+        assert!(sanitized.ends_with("…<truncated>"));
+    }
 
     #[test]
     fn decompress_body_deflate_handles_zlib_wrapped_per_rfc9110() {

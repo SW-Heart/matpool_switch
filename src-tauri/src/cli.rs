@@ -55,16 +55,18 @@ use gemini_config::get_gemini_env_path;
 use rusqlite::{Connection, OpenFlags};
 use std::env;
 use std::fs;
+#[cfg(target_os = "windows")]
+use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::net::{SocketAddr, TcpStream};
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 use store::AppState;
-#[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
 #[cfg(target_os = "windows")]
 use winreg::{enums::*, RegKey};
 
@@ -314,6 +316,7 @@ async fn models_cli(args: &[String]) -> CliResult {
             let apps = expand_app_types(app)?;
             let outcome =
                 services::matpool_models::sync_matpool_models_for_apps(&db, &apps).await?;
+            sync_codex_live_after_model_sync(db.clone(), &apps).await?;
             print_model_sync_outcome(&outcome);
         }
         unknown => {
@@ -492,6 +495,8 @@ const WINDOWS_RUN_VALUE_NAME: &str = "MatpoolSwitchDaemon";
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+#[cfg(target_os = "windows")]
+const DETACHED_PROCESS: u32 = 0x00000008;
 
 #[cfg(target_os = "macos")]
 fn daemon_install() -> CliResult {
@@ -604,7 +609,14 @@ fn daemon_start_service() -> CliResult {
 
 #[cfg(target_os = "windows")]
 fn daemon_start_service() -> CliResult {
-    run_schtasks(&["/Run", "/TN", WINDOWS_TASK_NAME])?;
+    if let Some(addr) =
+        probe_proxy_health(read_db_state().ok().and_then(|state| state.proxy_addr()))?
+    {
+        println!("Matpool daemon already running at {addr}.");
+        return Ok(());
+    }
+
+    windows_spawn_daemon_detached()?;
     println!("Matpool daemon started.");
     Ok(())
 }
@@ -1072,6 +1084,35 @@ fn windows_task_exists() -> bool {
 }
 
 #[cfg(target_os = "windows")]
+fn windows_spawn_daemon_detached() -> CliResult {
+    let log_dir = get_app_config_dir().join("logs");
+    fs::create_dir_all(&log_dir).map_err(|e| format!("failed to create log dir: {e}"))?;
+    let stdout = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_dir.join("daemon.out.log"))
+        .map_err(|e| format!("failed to open daemon stdout log: {e}"))?;
+    let stderr = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_dir.join("daemon.err.log"))
+        .map_err(|e| format!("failed to open daemon stderr log: {e}"))?;
+    let exe = env::current_exe().map_err(|e| format!("failed to resolve current exe: {e}"))?;
+
+    Command::new(exe)
+        .args(["daemon", "run"])
+        .current_dir(get_app_config_dir())
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr))
+        .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
+        .spawn()
+        .map_err(|e| format!("failed to start Matpool daemon: {e}"))?;
+
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
 fn windows_task_xml_path() -> PathBuf {
     get_app_config_dir().join("daemon-task.xml")
 }
@@ -1118,8 +1159,13 @@ shell.Run "{command}", 0, True
 
 #[cfg(target_os = "windows")]
 fn windows_task_user_id() -> Option<String> {
-    let username = env::var("USERNAME").ok().filter(|value| !value.is_empty())?;
-    match env::var("USERDOMAIN").ok().filter(|value| !value.is_empty()) {
+    let username = env::var("USERNAME")
+        .ok()
+        .filter(|value| !value.is_empty())?;
+    match env::var("USERDOMAIN")
+        .ok()
+        .filter(|value| !value.is_empty())
+    {
         Some(domain) => Some(format!(r"{domain}\{username}")),
         None => Some(username),
     }
@@ -1322,6 +1368,61 @@ async fn sync_matpool_models_best_effort(db: &Database, apps: &[&str]) {
             eprintln!("warning: failed to sync Matpool models: {err}");
         }
     }
+}
+
+async fn sync_codex_live_after_model_sync(db: Arc<Database>, apps: &[AppType]) -> CliResult {
+    if !apps.iter().any(|app| matches!(app, AppType::Codex)) {
+        return Ok(());
+    }
+
+    let Some(current_provider_id) = db
+        .get_current_provider(AppType::Codex.as_str())
+        .map_err(|e| e.to_string())?
+    else {
+        return Ok(());
+    };
+    if current_provider_id != "matpool-codex" {
+        return Ok(());
+    }
+
+    let Some(provider) = db
+        .get_provider_by_id(&current_provider_id, AppType::Codex.as_str())
+        .map_err(|e| e.to_string())?
+    else {
+        return Ok(());
+    };
+
+    let proxy_enabled = db
+        .get_proxy_config_for_app(AppType::Codex.as_str())
+        .await
+        .map(|config| config.enabled)
+        .unwrap_or(false);
+
+    if proxy_enabled {
+        let state = AppState::new(db);
+        state
+            .proxy_service
+            .sync_codex_live_from_provider_while_proxy_active(&provider)
+            .await?;
+    } else {
+        let settings = provider
+            .settings_config
+            .as_object()
+            .ok_or_else(|| "Codex provider config must be a JSON object".to_string())?;
+        let auth = settings
+            .get("auth")
+            .ok_or_else(|| "Codex provider config is missing auth".to_string())?;
+        let config_text = settings.get("config").and_then(serde_json::Value::as_str);
+        crate::codex_config::write_codex_provider_live_with_catalog(
+            &provider.settings_config,
+            provider.category.as_deref(),
+            auth,
+            config_text,
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
 }
 
 fn print_model_sync_outcome(outcome: &services::matpool_models::MatpoolModelSyncOutcome) {
@@ -1546,6 +1647,16 @@ fn parse_setup_apps(value: Option<&str>) -> CliResult<Vec<&'static str>> {
 }
 
 fn expand_apps(app: &str) -> CliResult<Vec<&'static str>> {
+    let normalized = app
+        .trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_ascii_lowercase();
+    let app = match normalized.as_str() {
+        "app|all" => "all",
+        other => other,
+    };
+
     match app {
         "all" => Ok(vec!["claude", "codex", "gemini"]),
         "claude" => Ok(vec!["claude"]),

@@ -98,7 +98,7 @@ pub fn write_codex_live_atomic(
     } else {
         None
     };
-    let _old_config = if config_path.exists() {
+    let old_config = if config_path.exists() {
         Some(fs::read(&config_path).map_err(|e| AppError::io(&config_path, e))?)
     } else {
         None
@@ -118,6 +118,12 @@ pub fn write_codex_live_atomic(
 
     // 第二步：写 config.toml（失败则回滚 auth.json）
     if let Err(e) = write_text_file(&config_path, &cfg_text) {
+        if let Some(bytes) = old_config {
+            let _ = atomic_write(&config_path, &bytes);
+        } else {
+            let _ = delete_file(&config_path);
+        }
+
         // 回滚 auth.json
         if let Some(bytes) = old_auth {
             let _ = atomic_write(&auth_path, &bytes);

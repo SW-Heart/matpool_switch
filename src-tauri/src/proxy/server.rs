@@ -26,6 +26,7 @@ use axum::{
 use hyper_util::rt::TokioIo;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{oneshot, RwLock};
 use tokio::task::JoinHandle;
 
@@ -33,6 +34,8 @@ use tokio::task::JoinHandle;
 type DesktopAppHandle = tauri::AppHandle;
 #[cfg(not(feature = "desktop"))]
 type DesktopAppHandle = ();
+
+const HEADER_CASE_PEEK_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// 代理服务器状态（共享）
 #[derive(Clone)]
@@ -163,8 +166,23 @@ impl ProxyServer {
                             // before hyper parses (and lowercases) the header names.
                             let original_cases = {
                                 let mut peek_buf = vec![0u8; 8192];
-                                match stream.peek(&mut peek_buf).await {
-                                    Ok(n) => {
+                                match tokio::time::timeout(
+                                    HEADER_CASE_PEEK_TIMEOUT,
+                                    stream.peek(&mut peek_buf),
+                                )
+                                .await
+                                {
+                                    Err(_) => {
+                                        log::debug!(
+                                            "[ProxyServer] peek timed out after {}ms; continuing without original header casing",
+                                            HEADER_CASE_PEEK_TIMEOUT.as_millis()
+                                        );
+                                        super::hyper_client::OriginalHeaderCases::default()
+                                    }
+                                    Ok(Ok(0)) => {
+                                        super::hyper_client::OriginalHeaderCases::default()
+                                    }
+                                    Ok(Ok(n)) => {
                                         let cases = super::hyper_client::OriginalHeaderCases::from_raw_bytes(&peek_buf[..n]);
                                         log::debug!(
                                             "[ProxyServer] Peeked {} bytes, captured {} header casings",
@@ -172,7 +190,7 @@ impl ProxyServer {
                                         );
                                         cases
                                     }
-                                    Err(e) => {
+                                    Ok(Err(e)) => {
                                         log::debug!("[ProxyServer] peek failed (non-fatal): {e}");
                                         super::hyper_client::OriginalHeaderCases::default()
                                     }

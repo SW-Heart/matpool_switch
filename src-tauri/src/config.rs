@@ -194,10 +194,33 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), AppError> {
         .as_nanos();
     tmp.push(format!("{file_name}.tmp.{ts}"));
 
-    {
-        let mut f = fs::File::create(&tmp).map_err(|e| AppError::io(&tmp, e))?;
+    let write_result = (|| -> Result<(), AppError> {
+        #[cfg(unix)]
+        let mut f = {
+            use std::os::unix::fs::OpenOptionsExt;
+
+            fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .mode(0o600)
+                .open(&tmp)
+                .map_err(|e| AppError::io(&tmp, e))?
+        };
+
+        #[cfg(not(unix))]
+        let mut f = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&tmp)
+            .map_err(|e| AppError::io(&tmp, e))?;
+
         f.write_all(data).map_err(|e| AppError::io(&tmp, e))?;
-        f.flush().map_err(|e| AppError::io(&tmp, e))?;
+        f.sync_all().map_err(|e| AppError::io(&tmp, e))?;
+        Ok(())
+    })();
+    if let Err(err) = write_result {
+        let _ = fs::remove_file(&tmp);
+        return Err(err);
     }
 
     #[cfg(unix)]
@@ -215,18 +238,24 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), AppError> {
         if path.exists() {
             let _ = fs::remove_file(path);
         }
-        fs::rename(&tmp, path).map_err(|e| AppError::IoContext {
-            context: format!("原子替换失败: {} -> {}", tmp.display(), path.display()),
-            source: e,
-        })?;
+        if let Err(e) = fs::rename(&tmp, path) {
+            let _ = fs::remove_file(&tmp);
+            return Err(AppError::IoContext {
+                context: format!("原子替换失败: {} -> {}", tmp.display(), path.display()),
+                source: e,
+            });
+        }
     }
 
     #[cfg(not(windows))]
     {
-        fs::rename(&tmp, path).map_err(|e| AppError::IoContext {
-            context: format!("原子替换失败: {} -> {}", tmp.display(), path.display()),
-            source: e,
-        })?;
+        if let Err(e) = fs::rename(&tmp, path) {
+            let _ = fs::remove_file(&tmp);
+            return Err(AppError::IoContext {
+                context: format!("原子替换失败: {} -> {}", tmp.display(), path.display()),
+                source: e,
+            });
+        }
     }
     Ok(())
 }
@@ -360,6 +389,57 @@ mod tests {
             serde_json::to_string(&sorted_a).unwrap(),
             serde_json::to_string(&sorted_b).unwrap(),
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_creates_new_files_private() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("auth.json");
+
+        atomic_write(&path, br#"{"OPENAI_API_KEY":"sk-test"}"#).expect("write");
+
+        let mode = fs::metadata(&path).expect("metadata").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_preserves_existing_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("settings.json");
+        fs::write(&path, "{}").expect("seed");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("chmod");
+
+        atomic_write(&path, br#"{"ok":true}"#).expect("write");
+
+        let mode = fs::metadata(&path).expect("metadata").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o644);
+    }
+
+    #[test]
+    fn atomic_write_removes_temp_file_when_replace_fails() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("settings.json");
+        fs::create_dir(&path).expect("seed directory at target path");
+
+        let err = atomic_write(&path, br#"{"ok":true}"#).expect_err("replace should fail");
+        assert!(
+            err.to_string().contains("原子替换失败") || err.to_string().contains("atomic"),
+            "unexpected error: {err}"
+        );
+
+        let tmp_prefix = "settings.json.tmp.";
+        let leaked_tmp = fs::read_dir(dir.path())
+            .expect("read temp dir")
+            .filter_map(Result::ok)
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .any(|name| name.starts_with(tmp_prefix));
+        assert!(!leaked_tmp, "failed atomic write should clean temp file");
     }
 }
 
