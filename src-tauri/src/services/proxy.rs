@@ -109,12 +109,9 @@ impl ProxyService {
         } else {
             ClaudeTakeoverAuthPolicy::PreserveExistingOrAuthToken
         };
-        // Copilot/Codex 接管时 live config 可能还是旧供应商；显示模型必须跟随目标 provider。
-        let takeover_model_fields = if provider.uses_managed_account_auth() {
-            Self::build_claude_takeover_model_fields(&provider.settings_config)
-        } else {
-            Self::build_claude_takeover_model_fields(config)
-        };
+        // 接管时 live config 可能仍是旧供应商或旧槽位；显示模型必须跟随目标 provider。
+        let takeover_model_fields =
+            Self::build_claude_takeover_model_fields(&provider.settings_config);
 
         Self::apply_claude_takeover_fields_with_policy_and_models(
             config,
@@ -3033,6 +3030,51 @@ mod tests {
         );
         assert_env_str(env, "ANTHROPIC_API_KEY", Some(PROXY_TOKEN_PLACEHOLDER));
         assert_env_str(env, "ANTHROPIC_AUTH_TOKEN", None);
+    }
+
+    #[test]
+    fn matpool_claude_takeover_sources_custom_model_from_provider() {
+        let provider = Provider::with_id(
+            "matpool-claude".to_string(),
+            "Matpool".to_string(),
+            json!({
+                "env": {
+                    "ANTHROPIC_BASE_URL": "https://token.matpool.com",
+                    "ANTHROPIC_MODEL": "GLM-5.2",
+                    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "GPT-5.4-Nano",
+                    "ANTHROPIC_DEFAULT_SONNET_MODEL": "MiMo-V2.5",
+                    "ANTHROPIC_DEFAULT_OPUS_MODEL": "Claude-Opus-4.7",
+                    "ANTHROPIC_CUSTOM_MODEL_OPTION": "Claude-Fable-5",
+                    "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME": "Claude-Fable-5"
+                }
+            }),
+            None,
+        );
+
+        let mut live_config = json!({
+            "env": {
+                "ANTHROPIC_BASE_URL": "https://stale.example.com",
+                "ANTHROPIC_AUTH_TOKEN": "stale-token",
+                "ANTHROPIC_CUSTOM_MODEL_OPTION": "Claude-Sonnet-5",
+                "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME": "Claude-Sonnet-5"
+            }
+        });
+        ProxyService::apply_claude_takeover_fields_for_provider(
+            &mut live_config,
+            "http://127.0.0.1:15721",
+            &provider,
+        );
+
+        let env = live_config
+            .get("env")
+            .and_then(|value| value.as_object())
+            .expect("env should exist");
+        assert_env_str(env, "ANTHROPIC_CUSTOM_MODEL_OPTION", Some("Claude-Fable-5"));
+        assert_env_str(
+            env,
+            "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME",
+            Some("Claude-Fable-5"),
+        );
     }
 
     #[test]

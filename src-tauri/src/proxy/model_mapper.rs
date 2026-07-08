@@ -72,11 +72,8 @@ impl ModelMapping {
     pub fn map_model(&self, original_model: &str) -> String {
         let model_lower = original_model.to_lowercase();
 
-        if let Some(canonical) = self.catalog_models.get(&model_lower) {
-            return canonical.clone();
-        }
-
-        // 1. 按模型类型匹配
+        // Fable is exposed by newer Claude Code as a built-in lowercase route.
+        // Treat it as the user-controlled custom slot before catalog canonicalization.
         if model_lower.contains("fable") {
             if let Some(ref m) = self.custom_model {
                 return m.clone();
@@ -90,6 +87,12 @@ impl ModelMapping {
                 return m.clone();
             }
         }
+
+        if let Some(canonical) = self.catalog_models.get(&model_lower) {
+            return canonical.clone();
+        }
+
+        // 1. 按模型类型匹配
         if model_lower.contains("haiku") {
             if let Some(ref m) = self.haiku_model {
                 return m.clone();
@@ -398,8 +401,8 @@ mod tests {
 
         let body = json!({"model": "claude-fable-5"});
         let (result, _, mapped) = apply_model_mapping(body, &provider);
-        assert_eq!(result["model"], "Claude-Fable-5");
-        assert_eq!(mapped, Some("Claude-Fable-5".to_string()));
+        assert_eq!(result["model"], "custom-fable-mapped");
+        assert_eq!(mapped, Some("custom-fable-mapped".to_string()));
 
         let body = json!({"model": "GLM-5.2"});
         let (result, _, mapped) = apply_model_mapping(body, &provider);

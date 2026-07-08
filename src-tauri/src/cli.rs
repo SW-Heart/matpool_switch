@@ -215,7 +215,7 @@ async fn status() -> CliResult {
         "  local_proxy_required: {}",
         if db_state
             .as_ref()
-            .map(|state| state.any_takeover_enabled())
+            .map(|state| state.local_proxy_required())
             .unwrap_or(false)
         {
             "yes"
@@ -843,6 +843,9 @@ fn current_provider_for_app(db: &Database, app: &AppType) -> CliResult<Option<pr
 }
 
 fn claude_provider_requires_proxy(provider: &provider::Provider) -> bool {
+    if provider.id == "matpool-claude" {
+        return true;
+    }
     if provider.is_github_copilot() || provider.uses_managed_account_auth() {
         return true;
     }
@@ -897,6 +900,8 @@ fn prepare_claude_matpool_proxy_takeover(state: &AppState) -> CliResult {
         .db
         .set_current_provider(AppType::Claude.as_str(), "matpool-claude")
         .map_err(|e| format!("failed to set claude current provider: {e}"))?;
+    settings::set_current_provider(&AppType::Claude, Some("matpool-claude"))
+        .map_err(|e| format!("failed to set local claude current provider: {e}"))?;
     Ok(())
 }
 
@@ -2131,17 +2136,27 @@ async fn sync_claude_live_after_model_sync(db: Arc<Database>, apps: &[AppType]) 
         return Ok(());
     }
 
-    let Some(current_provider_id) = settings::get_effective_current_provider(&db, &AppType::Claude)
-        .map_err(|e| e.to_string())?
-    else {
+    let effective_current_provider =
+        settings::get_effective_current_provider(&db, &AppType::Claude)
+            .map_err(|e| e.to_string())?;
+    let db_current_provider = db
+        .get_current_provider(AppType::Claude.as_str())
+        .map_err(|e| e.to_string())?;
+
+    if effective_current_provider.as_deref() != Some("matpool-claude")
+        && db_current_provider.as_deref() != Some("matpool-claude")
+    {
         return Ok(());
-    };
-    if current_provider_id != "matpool-claude" {
-        return Ok(());
+    }
+    if db_current_provider.as_deref() == Some("matpool-claude")
+        && effective_current_provider.as_deref() != Some("matpool-claude")
+    {
+        settings::set_current_provider(&AppType::Claude, Some("matpool-claude"))
+            .map_err(|e| e.to_string())?;
     }
 
     let Some(provider) = db
-        .get_provider_by_id(&current_provider_id, AppType::Claude.as_str())
+        .get_provider_by_id("matpool-claude", AppType::Claude.as_str())
         .map_err(|e| e.to_string())?
     else {
         return Ok(());
@@ -2293,6 +2308,17 @@ impl ReadOnlyDbState {
 
     fn any_takeover_enabled(&self) -> bool {
         !self.takeover_enabled.is_empty()
+    }
+
+    fn local_proxy_required(&self) -> bool {
+        if self.any_takeover_enabled() {
+            return true;
+        }
+        self.current_provider(AppType::Claude.as_str()) == Some("matpool-claude")
+            && self
+                .direct_takeover_apps
+                .iter()
+                .any(|app| app == AppType::Claude.as_str())
     }
 
     /// 返回 takeover 状态字符串：
@@ -2604,5 +2630,17 @@ mod cli_tests {
             env["ANTHROPIC_CUSTOM_MODEL_OPTION_NAME"],
             Value::String("GPT-5.5".to_string())
         );
+    }
+
+    #[test]
+    fn matpool_claude_provider_requires_proxy() {
+        let provider = provider::Provider::with_id(
+            "matpool-claude".to_string(),
+            "Matpool".to_string(),
+            json!({ "env": { "ANTHROPIC_BASE_URL": "https://token.matpool.com" } }),
+            None,
+        );
+
+        assert!(claude_provider_requires_proxy(&provider));
     }
 }
