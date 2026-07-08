@@ -871,6 +871,12 @@ impl ProxyService {
                         .map_err(|e| format!("获取 Claude 当前供应商失败: {e}"))?;
 
                 if let Some(provider_id) = provider_id {
+                    if crate::database::is_matpool_seed_id(&provider_id) {
+                        log::info!(
+                            "跳过从 Claude live 回填 Matpool seed Token；Matpool Token 仅从 Keychain 注入 (provider: {provider_id})"
+                        );
+                        return Ok(());
+                    }
                     if let Ok(Some(mut provider)) =
                         self.db.get_provider_by_id(&provider_id, "claude")
                     {
@@ -1256,7 +1262,7 @@ impl ProxyService {
     }
 
     /// 备份指定应用的 Live 配置（严格模式：目标配置不存在则返回错误）
-    async fn backup_live_config_strict(&self, app_type: &AppType) -> Result<(), String> {
+    pub async fn backup_live_config_strict(&self, app_type: &AppType) -> Result<(), String> {
         let (app_type_str, config) = match app_type {
             AppType::Claude => ("claude", self.read_claude_live()?),
             AppType::Codex => ("codex", self.read_codex_live()?),
@@ -1595,7 +1601,7 @@ impl ProxyService {
         }
     }
 
-    async fn restore_live_config_for_app_with_fallback(
+    pub async fn restore_live_config_for_app_with_fallback(
         &self,
         app_type: &AppType,
     ) -> Result<(), String> {

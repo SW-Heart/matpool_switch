@@ -44,10 +44,10 @@ matpool takeover all
 matpool status
 ```
 
-Claude Code takeover can run without the local proxy when the current Claude
-provider uses Matpool's native Anthropic format. Codex, Gemini, and Claude
-providers that need protocol conversion use the local proxy, so keep the daemon
-or the Matpool Switch desktop app running for those modes.
+Matpool Claude uses the local proxy to inject the Matpool token from Keychain
+and to restore Claude Code's lowercased model IDs back to Matpool's canonical
+model IDs. Keep the daemon or the Matpool Switch desktop app running while
+takeover is enabled.
 
 ## What Takeover Changes
 
@@ -57,9 +57,10 @@ Matpool Switch writes managed settings for:
 - Codex CLI: `~/.codex/auth.json` and `~/.codex/config.toml`
 - Gemini CLI: `~/.gemini/.env`
 
-Codex, Gemini, and conversion-based Claude providers point at the local proxy on
-`127.0.0.1:15721`. Matpool's native Claude provider is written directly to
-Claude Code settings and does not require the local proxy.
+Matpool Claude, Codex, Gemini, and conversion-based Claude providers point at
+the local proxy on `127.0.0.1:15721`. The Matpool token stays in the OS
+keychain; managed tool config files receive only the values needed to route
+through Matpool Switch.
 
 The Matpool token is stored in the OS keychain using service `Matpool Switch`
 and account `matpool-token`. It is not written into tool config files.

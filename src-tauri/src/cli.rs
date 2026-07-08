@@ -134,6 +134,7 @@ Usage:
   matpool models claude set [options]  Set Claude model slots, then sync live config
   matpool provider list [app|all]      List configured providers
   matpool provider seed                Ensure built-in Matpool/official providers exist
+  matpool provider switch <app> <id>   Switch current provider (claude only; 'default' restores your original config)
   matpool takeover <app|all>           Enable local proxy takeover for an app
   matpool takeover <app|all> --disable Disable local proxy takeover for an app
   matpool daemon install               Install user-level background daemon
@@ -240,14 +241,13 @@ async fn status() -> CliResult {
             .ok()
             .and_then(|state| state.current_provider(app_key))
             .unwrap_or("-");
+        let takeover_state = db_state
+            .as_ref()
+            .map(|state| state.takeover_state(app_key))
+            .unwrap_or("false");
         println!(
             "  {:<15} current_provider={:<24} takeover={}",
-            app_key,
-            current,
-            db_state
-                .as_ref()
-                .map(|state| state.takeover_enabled(app_key))
-                .unwrap_or(false)
+            app_key, current, takeover_state,
         );
     }
 
@@ -286,13 +286,35 @@ async fn provider_cli(args: &[String]) -> CliResult {
             let inserted = ensure_provider_seeds()?;
             println!("Provider seeds ensured. inserted={inserted}");
         }
+        "switch" => {
+            let app = args
+                .get(1)
+                .map(String::as_str)
+                .ok_or_else(|| "usage: matpool provider switch <app> <provider_id>".to_string())?;
+            let provider_id = args
+                .get(2)
+                .map(String::as_str)
+                .ok_or_else(|| "usage: matpool provider switch <app> <provider_id>".to_string())?;
+            provider_switch(app, provider_id).await?;
+        }
         unknown => {
             return Err(format!(
-                "unknown provider command '{unknown}'. Usage: matpool provider list [app|all] | matpool provider seed"
+                "unknown provider command '{unknown}'. Usage: matpool provider list [app|all] | matpool provider seed | matpool provider switch <app> <provider_id>"
             ));
         }
     }
     Ok(())
+}
+
+async fn provider_switch(app: &str, provider_id: &str) -> CliResult {
+    if app != "claude" {
+        return Err(format!(
+            "provider switch for '{app}' is not supported in CLI yet; only 'claude' direct mode is supported"
+        ));
+    }
+    let db = init_db()?;
+    let state = AppState::new(db);
+    switch_claude_provider(&state, provider_id).await
 }
 
 async fn models_cli(args: &[String]) -> CliResult {
@@ -736,6 +758,12 @@ async fn takeover(args: &[String]) -> CliResult {
     }
 
     if enabled {
+        if proxy_app_keys
+            .iter()
+            .any(|key| key == AppType::Claude.as_str())
+        {
+            prepare_claude_matpool_proxy_takeover(&state)?;
+        }
         set_takeover_apps(&state, &proxy_app_keys, true).await?;
         if app_keys.contains(&AppType::Claude.as_str())
             && !proxy_app_keys.iter().any(|key| key == "claude")
@@ -748,14 +776,17 @@ async fn takeover(args: &[String]) -> CliResult {
     } else {
         let disable_app_keys: Vec<String> = app_keys.iter().map(|key| key.to_string()).collect();
         set_takeover_apps(&state, &disable_app_keys, false).await?;
+        // 直接模式 claude 的 proxy_config.enabled 本来就是 false，
+        // set_takeover_apps 幂等返回不会恢复 settings.json，需要显式处理。
+        if app_keys.contains(&AppType::Claude.as_str()) {
+            disable_claude_direct_takeover(&state).await?;
+        }
     }
 
     if enabled {
         if proxy_app_keys.is_empty() {
             println!();
-            println!(
-                "Note: Claude was synced directly; no local proxy is required for this provider."
-            );
+            println!("Note: selected apps were synced directly.");
         } else {
             println!();
             println!("Note: takeover points managed tools at the local Matpool proxy.");
@@ -784,7 +815,7 @@ async fn set_takeover_apps(state: &AppState, apps: &[String], enabled: bool) -> 
 fn proxy_takeover_apps(db: &Database, apps: &[&str]) -> CliResult<Vec<String>> {
     let mut proxy_apps = Vec::new();
     for app_key in apps {
-        if *app_key == AppType::Claude.as_str() && !current_claude_provider_requires_proxy(db)? {
+        if *app_key == AppType::Claude.as_str() && !claude_takeover_target_requires_proxy(db)? {
             continue;
         }
         proxy_apps.push((*app_key).to_string());
@@ -792,8 +823,11 @@ fn proxy_takeover_apps(db: &Database, apps: &[&str]) -> CliResult<Vec<String>> {
     Ok(proxy_apps)
 }
 
-fn current_claude_provider_requires_proxy(db: &Database) -> CliResult<bool> {
-    let Some(provider) = current_provider_for_app(db, &AppType::Claude)? else {
+fn claude_takeover_target_requires_proxy(db: &Database) -> CliResult<bool> {
+    let Some(provider) = db
+        .get_provider_by_id("matpool-claude", AppType::Claude.as_str())
+        .map_err(|e| e.to_string())?
+    else {
         return Ok(true);
     };
     Ok(claude_provider_requires_proxy(&provider))
@@ -850,6 +884,23 @@ fn claude_provider_requires_proxy(provider: &provider::Provider) -> bool {
     )
 }
 
+fn prepare_claude_matpool_proxy_takeover(state: &AppState) -> CliResult {
+    if state
+        .db
+        .get_provider_by_id("matpool-claude", AppType::Claude.as_str())
+        .map_err(|e| e.to_string())?
+        .is_none()
+    {
+        return Err("matpool-claude provider is missing. Run: matpool provider seed".to_string());
+    }
+    sync_default_provider_from_live(state, &AppType::Claude)?;
+    state
+        .db
+        .set_current_provider(AppType::Claude.as_str(), "matpool-claude")
+        .map_err(|e| format!("failed to set claude current provider: {e}"))?;
+    Ok(())
+}
+
 async fn enable_claude_direct_takeover(state: &AppState) -> CliResult {
     let proxy_enabled = state
         .db
@@ -863,8 +914,111 @@ async fn enable_claude_direct_takeover(state: &AppState) -> CliResult {
             .set_takeover_for_app_without_managing_proxy(AppType::Claude.as_str(), false)
             .await?;
     }
-    sync_claude_live_from_current_provider(state.db.as_ref()).await?;
+    // 默认切换到 matpool-claude（start 时自动接管 matpool 渠道）。
+    let matpool_claude_exists = state
+        .db
+        .get_provider_by_id("matpool-claude", AppType::Claude.as_str())
+        .map_err(|e| e.to_string())?
+        .is_some();
+    if !matpool_claude_exists {
+        return Err("matpool-claude provider is missing. Run: matpool provider seed".to_string());
+    }
+    switch_claude_provider(state, "matpool-claude").await?;
     println!("claude takeover enabled directly.");
+    println!("Switch back to your original config with: matpool provider switch claude default");
+    Ok(())
+}
+
+async fn disable_claude_direct_takeover(state: &AppState) -> CliResult {
+    // 直接模式不写 proxy_config.enabled，set_takeover_apps 的 disable 路径
+    // 会因 enabled=false 幂等返回。这里通过切回 default 走用户原本配置
+    // （从 backup 恢复 settings.json + 清 backup）。
+    switch_claude_provider(state, "default").await
+}
+
+/// 切换 claude current provider 并同步 settings.json。
+///
+/// - 切到 `default`：走用户原本配置。有 backup 则恢复 + 清 backup；无 backup 则
+///   settings.json 已是用户配置，不动（透传语义）。
+/// - 切到其他 provider：无 backup 则先备份当前 settings.json，再写新 provider 配置；
+///   有 backup 则保留最早的原始备份，仅覆写 settings.json 为新 provider 配置。
+async fn switch_claude_provider(state: &AppState, provider_id: &str) -> CliResult {
+    let provider = state
+        .db
+        .get_provider_by_id(provider_id, AppType::Claude.as_str())
+        .map_err(|e| format!("failed to load claude provider '{provider_id}': {e}"))?
+        .ok_or_else(|| {
+            format!("claude provider '{provider_id}' not found. Run: matpool provider list claude")
+        })?;
+
+    let has_backup = state
+        .db
+        .get_live_backup(AppType::Claude.as_str())
+        .await
+        .map(|b| b.is_some())
+        .unwrap_or(false);
+
+    if provider_id == "default" {
+        if has_backup {
+            state
+                .proxy_service
+                .restore_live_config_for_app_with_fallback(&AppType::Claude)
+                .await
+                .map_err(|e| format!("failed to restore Claude live config: {e}"))?;
+            state
+                .db
+                .delete_live_backup(AppType::Claude.as_str())
+                .await
+                .map_err(|e| format!("failed to delete Claude live backup: {e}"))?;
+            state
+                .db
+                .set_current_provider(AppType::Claude.as_str(), provider_id)
+                .map_err(|e| format!("failed to set claude current provider: {e}"))?;
+            // 恢复后 settings.json 已是用户原始配置，同步到 `default` 的 settings_config，
+            // 让 `provider list` 显示与 live 一致的内容。
+            sync_default_provider_from_live(state, &AppType::Claude)?;
+            println!("Switched claude to default; settings.json restored to your original config.");
+        } else {
+            state
+                .db
+                .set_current_provider(AppType::Claude.as_str(), provider_id)
+                .map_err(|e| format!("failed to set claude current provider: {e}"))?;
+            println!(
+                "Switched claude to default; settings.json unchanged (no takeover was active)."
+            );
+        }
+    } else {
+        if claude_provider_requires_proxy(&provider) {
+            return Err(format!(
+                "provider '{provider_id}' requires the local proxy; use the desktop app to switch"
+            ));
+        }
+        if !has_backup {
+            // 首次接管：当前 settings.json 是用户原始配置，先同步到 `default` provider
+            // 的 settings_config（让 `provider list` 显示最新），再备份 + 覆写。
+            sync_default_provider_from_live(state, &AppType::Claude)?;
+            state
+                .proxy_service
+                .backup_live_config_strict(&AppType::Claude)
+                .await
+                .map_err(|e| format!("failed to backup Claude live config: {e}"))?;
+        }
+        let live_provider =
+            services::matpool_inject::provider_with_injected_matpool_token(&provider)
+                .unwrap_or(provider);
+        services::provider::write_live_with_common_config(
+            state.db.as_ref(),
+            &AppType::Claude,
+            &live_provider,
+        )
+        .map_err(|e| format!("failed to write Claude live config: {e}"))?;
+        state
+            .db
+            .set_current_provider(AppType::Claude.as_str(), provider_id)
+            .map_err(|e| format!("failed to set claude current provider: {e}"))?;
+        println!("Switched claude to '{provider_id}'.");
+    }
+
     Ok(())
 }
 
@@ -875,7 +1029,9 @@ async fn sync_claude_live_from_current_provider(db: &Database) -> CliResult {
     if claude_provider_requires_proxy(&provider) {
         return Err("Claude current provider requires the local proxy".to_string());
     }
-    services::provider::write_live_with_common_config(db, &AppType::Claude, &provider)
+    let live_provider = services::matpool_inject::provider_with_injected_matpool_token(&provider)
+        .unwrap_or(provider);
+    services::provider::write_live_with_common_config(db, &AppType::Claude, &live_provider)
         .map_err(|e| format!("failed to write Claude live config: {e}"))?;
     Ok(())
 }
@@ -940,14 +1096,14 @@ async fn daemon_run_foreground() -> CliResult {
 
     println!();
     println!("Stopping Matpool proxy daemon...");
-    let stop_result = match state.proxy_service.stop().await {
-        Ok(()) => {
-            println!("Matpool proxy daemon stopped.");
-            Ok(())
-        }
-        Err(err) if err.contains("未运行") || err.contains("not running") => Ok(()),
-        Err(err) => Err(err),
-    };
+    // 前台 daemon 退出时恢复 Live 配置，和桌面 App 退出对齐。
+    // stop_with_restore_keep_state 会停止代理 + 从 backup 恢复
+    // settings.json/auth.json/.env，但保留 proxy_config.enabled 状态，
+    // 下次桌面 App 启动时可自动重新接管。
+    let stop_result = state.proxy_service.stop_with_restore_keep_state().await;
+    if stop_result.is_ok() {
+        println!("Matpool proxy daemon stopped; live configs restored.");
+    }
     #[cfg(target_os = "windows")]
     let _ = remove_daemon_pid_file();
     stop_result
@@ -1766,6 +1922,12 @@ async fn setup(args: &[String]) -> CliResult {
             }
         }
         let state = AppState::new(db);
+        if proxy_app_keys
+            .iter()
+            .any(|key| key == AppType::Claude.as_str())
+        {
+            prepare_claude_matpool_proxy_takeover(&state)?;
+        }
         set_takeover_apps(&state, &proxy_app_keys, true).await?;
         if options.apps.contains(&AppType::Claude.as_str())
             && !proxy_app_keys.iter().any(|key| key == "claude")
@@ -1832,7 +1994,112 @@ fn init_db() -> CliResult<Arc<Database>> {
     db.init_default_official_providers()
         .map_err(|e| e.to_string())?;
     ensure_default_current_providers(&db)?;
-    Ok(Arc::new(db))
+    let db = Arc::new(db);
+    // CLI 环境下也确保 `default` provider 存在。桌面 App 在 lib.rs 启动时会从
+    // live settings.json 自动导入，但纯 CLI 用户（headless / SSH）可能从未启动
+    // 过桌面 App，DB 里就缺 `default`，导致 `matpool provider switch claude default`
+    // 报 "provider not found"。这里补上导入。
+    let state = AppState::new(db.clone());
+    ensure_default_provider_exists(&state)?;
+    // 同步 `default` provider 的 settings_config 与 live settings.json，
+    // 让 `matpool provider list` 显示最新配置（覆盖用户手动改 settings.json 的场景）。
+    sync_default_provider_from_live(&state, &AppType::Claude)?;
+    Ok(db)
+}
+
+/// 确保 `default` provider 存在（claude/codex/gemini）。
+///
+/// 跳过条件：
+/// - `default` 已存在
+/// - live 配置当前被代理接管（含占位符，不是用户真实配置）
+/// - `import_default_config` 内部的 `has_non_official_seed_provider` 守卫
+///
+/// 导入失败时分情况：live 配置文件不存在视为"用户没用这个 app"，静默跳过；
+/// 其他错误打 stderr 但不阻塞 CLI。
+fn ensure_default_provider_exists(state: &AppState) -> CliResult<()> {
+    for app in [AppType::Claude, AppType::Codex, AppType::Gemini] {
+        if state
+            .db
+            .get_provider_by_id("default", app.as_str())
+            .map_err(|e| e.to_string())?
+            .is_some()
+        {
+            continue;
+        }
+        if state
+            .proxy_service
+            .detect_takeover_in_live_config_for_app(&app)
+        {
+            continue;
+        }
+        match services::provider::import_default_config(state, app.clone()) {
+            Ok(_) => {}
+            Err(e) => {
+                let msg = e.to_string();
+                let missing = msg.contains("不存在")
+                    || msg.contains("is missing")
+                    || msg.contains("configuration is missing");
+                if !missing {
+                    eprintln!(
+                        "[matpool] skipped importing 'default' {} provider: {msg}",
+                        app.as_str()
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 同步 `default` provider 的 settings_config 与 live settings.json 最新内容。
+///
+/// 用于让 `matpool provider list` 显示最新的用户配置（否则 `default` 是一次性快照，
+/// 用户手动改 settings.json 后 DB 里仍是旧值）。
+///
+/// 跳过条件（任何一条都不同步）：
+/// - `default` provider 不存在
+/// - live 配置含代理占位符（处于代理接管状态）
+/// - `proxy_live_backup` 表有记录（处于直接接管状态，settings.json 是 matpool 配置而非用户原始配置）
+/// - settings.json 不存在或不可读
+fn sync_default_provider_from_live(state: &AppState, app_type: &AppType) -> CliResult<()> {
+    if *app_type != AppType::Claude {
+        return Ok(());
+    }
+    let Some(existing) = state
+        .db
+        .get_provider_by_id("default", app_type.as_str())
+        .map_err(|e| e.to_string())?
+    else {
+        return Ok(());
+    };
+    if state
+        .proxy_service
+        .detect_takeover_in_live_config_for_app(app_type)
+    {
+        return Ok(());
+    }
+    if state
+        .db
+        .has_live_backup_sync(app_type.as_str())
+        .map_err(|e| e.to_string())?
+    {
+        return Ok(());
+    }
+    let settings_path = get_claude_settings_path();
+    if !settings_path.exists() {
+        return Ok(());
+    }
+    let mut live: serde_json::Value =
+        crate::config::read_json_file(&settings_path).map_err(|e| e.to_string())?;
+    let _ = services::provider::normalize_claude_models_in_value(&mut live);
+    if existing.settings_config == live {
+        return Ok(());
+    }
+    state
+        .db
+        .update_provider_settings_config(app_type.as_str(), "default", &live)
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 fn ensure_provider_seeds() -> CliResult<usize> {
@@ -1894,8 +2161,15 @@ async fn sync_claude_live_after_model_sync(db: Arc<Database>, apps: &[AppType]) 
             .sync_claude_live_from_provider_while_proxy_active(&provider)
             .await?;
     } else if !claude_provider_requires_proxy(&provider) {
-        services::provider::write_live_with_common_config(db.as_ref(), &AppType::Claude, &provider)
-            .map_err(|e| e.to_string())?;
+        let live_provider =
+            services::matpool_inject::provider_with_injected_matpool_token(&provider)
+                .unwrap_or(provider);
+        services::provider::write_live_with_common_config(
+            db.as_ref(),
+            &AppType::Claude,
+            &live_provider,
+        )
+        .map_err(|e| e.to_string())?;
     }
 
     Ok(())
@@ -2002,6 +2276,7 @@ fn ensure_default_current_providers(db: &Database) -> CliResult {
 struct ReadOnlyDbState {
     current_providers: Vec<(String, String)>,
     takeover_enabled: Vec<String>,
+    direct_takeover_apps: Vec<String>,
     proxy_address: Option<String>,
     proxy_port: Option<u16>,
 }
@@ -2019,6 +2294,20 @@ impl ReadOnlyDbState {
 
     fn any_takeover_enabled(&self) -> bool {
         !self.takeover_enabled.is_empty()
+    }
+
+    /// 返回 takeover 状态字符串：
+    /// - `"true"`: 代理模式接管（proxy_config.enabled=1）
+    /// - `"direct"`: 直接模式接管（无本地代理，但 settings.json 已被覆写，backup 存在）
+    /// - `"false"`: 未接管
+    fn takeover_state(&self, app_key: &str) -> &'static str {
+        if self.takeover_enabled(app_key) {
+            "true"
+        } else if self.direct_takeover_apps.iter().any(|app| app == app_key) {
+            "direct"
+        } else {
+            "false"
+        }
     }
 
     fn proxy_addr(&self) -> Option<SocketAddr> {
@@ -2042,11 +2331,13 @@ fn read_db_state() -> CliResult<ReadOnlyDbState> {
 
     let current_providers = query_current_providers(&conn)?;
     let takeover_enabled = query_takeover_enabled(&conn)?;
+    let direct_takeover_apps = query_direct_takeover_apps(&conn)?;
     let (proxy_address, proxy_port) = query_proxy_listen_addr(&conn)?;
 
     Ok(ReadOnlyDbState {
         current_providers,
         takeover_enabled,
+        direct_takeover_apps,
         proxy_address,
         proxy_port,
     })
@@ -2072,6 +2363,23 @@ fn query_current_providers(conn: &Connection) -> CliResult<Vec<(String, String)>
 fn query_takeover_enabled(conn: &Connection) -> CliResult<Vec<String>> {
     let mut stmt = conn
         .prepare("SELECT app_type FROM proxy_config WHERE enabled = 1 ORDER BY app_type")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| e.to_string())?;
+
+    let mut apps = Vec::new();
+    for row in rows {
+        apps.push(row.map_err(|e| e.to_string())?);
+    }
+    Ok(apps)
+}
+
+/// 直接模式接管：proxy_config.enabled=0 但 proxy_live_backup 表中有记录，
+/// 说明 settings.json 已被覆写为 matpool 配置（无本地代理）。
+fn query_direct_takeover_apps(conn: &Connection) -> CliResult<Vec<String>> {
+    let mut stmt = conn
+        .prepare("SELECT app_type FROM proxy_live_backup ORDER BY app_type")
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |row| row.get::<_, String>(0))

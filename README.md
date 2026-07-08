@@ -33,10 +33,10 @@ matpool takeover all --disable
 matpool doctor
 ```
 
-Claude Code 接管会写入 `~/.claude/settings.json`。当当前 Claude 供应商是
-Matpool 原生 Anthropic 格式时，不需要本地代理；需要协议转换的 Claude 供应商、
-Codex、Gemini 仍会使用本地代理 `127.0.0.1:15721`，此时需要保持 Matpool daemon
-或桌面客户端运行。
+Claude Code 接管会写入 `~/.claude/settings.json`。Matpool Claude 会使用本地代理
+`127.0.0.1:15721` 注入 Keychain 中的 Matpool Token，并把 Claude Code 可能小写化的
+模型 ID 还原成 Matpool 的真实模型 ID；因此启用接管后需要保持 Matpool daemon 或桌面
+客户端运行。
 
 执行 `matpool takeover claude` 后，CLI 会展示当前 Claude `/model` 菜单位置对应的
 Matpool 模型 ID，并询问是否使用默认配置：
@@ -133,11 +133,11 @@ matpool takeover all --disable
 matpool doctor
 ```
 
-Claude Code takeover writes `~/.claude/settings.json`. When the current Claude
-provider uses Matpool's native Anthropic format, no local proxy is required.
-Claude providers that need protocol conversion, Codex, and Gemini still use the
-local proxy `127.0.0.1:15721`; keep the Matpool daemon or desktop client running
-for those takeover modes.
+Claude Code takeover writes `~/.claude/settings.json`. Matpool Claude uses the
+local proxy `127.0.0.1:15721` to inject the Matpool token from Keychain and to
+restore Claude Code's lowercased model IDs back to Matpool's canonical model
+IDs. Keep the Matpool daemon or desktop client running while takeover is
+enabled.
 
 After `matpool takeover claude`, the CLI shows the current Matpool model IDs
 used by Claude Code's `/model` menu:

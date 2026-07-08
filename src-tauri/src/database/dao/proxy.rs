@@ -776,6 +776,20 @@ impl Database {
         Ok(count > 0)
     }
 
+    /// 同步版本：检查指定 app 是否存在 Live 配置备份。
+    /// 用于 sync 上下文（如 init_db）判断直接模式接管是否激活。
+    pub fn has_live_backup_sync(&self, app_type: &str) -> Result<bool, AppError> {
+        let conn = lock_conn!(self.conn);
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM proxy_live_backup WHERE app_type = ?1",
+                rusqlite::params![app_type],
+                |row| row.get(0),
+            )
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        Ok(count > 0)
+    }
+
     /// 获取 Live 配置备份
     pub async fn get_live_backup(&self, app_type: &str) -> Result<Option<LiveBackup>, AppError> {
         let conn = lock_conn!(self.conn);

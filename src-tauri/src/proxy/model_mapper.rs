@@ -5,7 +5,7 @@
 use crate::claude_desktop_config::ONE_M_CONTEXT_MARKER;
 use crate::provider::Provider;
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 /// 模型映射配置
 pub struct ModelMapping {
@@ -14,7 +14,7 @@ pub struct ModelMapping {
     pub opus_model: Option<String>,
     pub fable_model: Option<String>,
     pub default_model: Option<String>,
-    pub catalog_models: HashSet<String>,
+    pub catalog_models: HashMap<String, String>,
 }
 
 impl ModelMapping {
@@ -65,8 +65,8 @@ impl ModelMapping {
     pub fn map_model(&self, original_model: &str) -> String {
         let model_lower = original_model.to_lowercase();
 
-        if self.catalog_models.contains(&model_lower) {
-            return original_model.to_string();
+        if let Some(canonical) = self.catalog_models.get(&model_lower) {
+            return canonical.clone();
         }
 
         // 1. 按模型类型匹配
@@ -106,7 +106,7 @@ impl ModelMapping {
     }
 }
 
-fn catalog_model_ids(provider: &Provider) -> HashSet<String> {
+fn catalog_model_ids(provider: &Provider) -> HashMap<String, String> {
     provider
         .settings_config
         .get("modelCatalog")
@@ -122,7 +122,7 @@ fn catalog_model_ids(provider: &Provider) -> HashSet<String> {
         })
         .map(str::trim)
         .filter(|model| !model.is_empty())
-        .map(str::to_ascii_lowercase)
+        .map(|model| (model.to_ascii_lowercase(), model.to_string()))
         .collect()
 }
 
@@ -372,8 +372,8 @@ mod tests {
 
         let body = json!({"model": "claude-fable-5"});
         let (result, _, mapped) = apply_model_mapping(body, &provider);
-        assert_eq!(result["model"], "claude-fable-5");
-        assert!(mapped.is_none());
+        assert_eq!(result["model"], "Claude-Fable-5");
+        assert_eq!(mapped, Some("Claude-Fable-5".to_string()));
 
         let body = json!({"model": "GLM-5.2"});
         let (result, _, mapped) = apply_model_mapping(body, &provider);
