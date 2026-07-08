@@ -43,21 +43,22 @@ Matpool 模型 ID，并询问是否使用默认配置：
 
 ```text
 Current Claude model configuration:
-  Claude default   Claude-Sonnet-5
-  Claude Sonnet    Claude-Sonnet-5
-  Claude Opus      Claude-Opus-4.8
-  Claude Haiku     Claude-Haiku-4.5
-  Claude Fable     Claude-Fable-5
-  Claude custom    Claude-Fable-5
+  Claude default   GLM-5.2
+  Claude Sonnet    MiMo-V2.5
+  Claude Opus      Claude-Opus-4.7
+  Claude Haiku     GPT-5.4-Nano
+  Claude custom    GPT-5.5
 
 Use current Claude model configuration? [Y/n]:
 ```
 
 直接回车使用当前默认配置；输入 `n` 后会依次提示 `Claude default`、`Claude Sonnet`、
-`Claude Opus`、`Claude Haiku`、`Claude Fable`、`Claude custom`。每一项输入
-Matpool 模型 ID 并回车后会立即保存并提示成功；直接回车保留当前值；输入 `?`
-可查看可用模型 ID。后续可用 `matpool models claude list` 查看可用模型，或用
-`matpool models claude set --sonnet <matpool_model_id>` 修改指定位置。
+`Claude Opus`、`Claude Haiku`、`Claude custom`。每一项输入 Matpool 模型 ID
+并回车后会立即保存并提示成功；直接回车保留当前值；输入 `?` 可查看可用模型 ID。
+如需使用 Fable 模型，请配置到 `Claude custom`，例如 `Claude-Fable-5`。后续可用
+`matpool models claude list` 查看可用模型，或用
+`matpool models claude set --sonnet <matpool_model_id> --custom <matpool_model_id>`
+修改指定位置。
 
 ## 开发指南
 
@@ -144,23 +145,23 @@ used by Claude Code's `/model` menu:
 
 ```text
 Current Claude model configuration:
-  Claude default   Claude-Sonnet-5
-  Claude Sonnet    Claude-Sonnet-5
-  Claude Opus      Claude-Opus-4.8
-  Claude Haiku     Claude-Haiku-4.5
-  Claude Fable     Claude-Fable-5
-  Claude custom    Claude-Fable-5
+  Claude default   GLM-5.2
+  Claude Sonnet    MiMo-V2.5
+  Claude Opus      Claude-Opus-4.7
+  Claude Haiku     GPT-5.4-Nano
+  Claude custom    GPT-5.5
 
 Use current Claude model configuration? [Y/n]:
 ```
 
 Press Enter to keep the defaults. Type `n` to edit each menu position in order:
 `Claude default`, `Claude Sonnet`, `Claude Opus`, `Claude Haiku`,
-`Claude Fable`, and `Claude custom`. Enter a Matpool model ID and press Enter
-to save that slot immediately; press Enter on an empty value to keep the
-current model; type `?` to list available model IDs. Later, run
-`matpool models claude list` or
-`matpool models claude set --sonnet <matpool_model_id>` to update slots.
+and `Claude custom`. Enter a Matpool model ID and press Enter to save that slot
+immediately; press Enter on an empty value to keep the current model; type `?`
+to list available model IDs. Configure Fable models through `Claude custom` if
+needed, for example `Claude-Fable-5`. Later, run `matpool models claude list` or
+`matpool models claude set --sonnet <matpool_model_id> --custom <matpool_model_id>`
+to update slots.
 
 ## Development
 

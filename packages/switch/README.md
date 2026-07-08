@@ -102,24 +102,24 @@ assigned to Claude Code's `/model` menu:
 
 ```text
 Current Claude model configuration:
-  Claude default   Claude-Sonnet-5
-  Claude Sonnet    Claude-Sonnet-5
-  Claude Opus      Claude-Opus-4.8
-  Claude Haiku     Claude-Haiku-4.5
-  Claude Fable     Claude-Fable-5
-  Claude custom    Claude-Fable-5
+  Claude default   GLM-5.2
+  Claude Sonnet    MiMo-V2.5
+  Claude Opus      Claude-Opus-4.7
+  Claude Haiku     GPT-5.4-Nano
+  Claude custom    GPT-5.5
 
 Use current Claude model configuration? [Y/n]:
 ```
 
 Press Enter to keep the defaults. Type `n` to edit each Claude menu position in
-order. For each prompt, enter a Matpool model ID and press Enter to save that
-slot immediately:
+order: default, Sonnet, Opus, Haiku, and custom. For each prompt, enter a
+Matpool model ID and press Enter to save that slot immediately. Configure Fable
+models through `Claude custom` if needed, for example `Claude-Fable-5`.
 
 ```text
-Claude default [Claude-Sonnet-5]: <matpool_model_id>
+Claude default [GLM-5.2]: <matpool_model_id>
 Claude default saved: <matpool_model_id>
-Claude Sonnet [Claude-Sonnet-5]: <matpool_model_id>
+Claude Sonnet [MiMo-V2.5]: <matpool_model_id>
 Claude Sonnet saved: <matpool_model_id>
 ```
 

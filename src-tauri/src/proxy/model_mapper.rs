@@ -13,6 +13,7 @@ pub struct ModelMapping {
     pub sonnet_model: Option<String>,
     pub opus_model: Option<String>,
     pub fable_model: Option<String>,
+    pub custom_model: Option<String>,
     pub default_model: Option<String>,
     pub catalog_models: HashMap<String, String>,
 }
@@ -43,6 +44,11 @@ impl ModelMapping {
                 .and_then(|v| v.as_str())
                 .filter(|s| !s.is_empty())
                 .map(String::from),
+            custom_model: env
+                .and_then(|e| e.get("ANTHROPIC_CUSTOM_MODEL_OPTION"))
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(String::from),
             default_model: env
                 .and_then(|e| e.get("ANTHROPIC_MODEL"))
                 .and_then(|v| v.as_str())
@@ -58,6 +64,7 @@ impl ModelMapping {
             || self.sonnet_model.is_some()
             || self.opus_model.is_some()
             || self.fable_model.is_some()
+            || self.custom_model.is_some()
             || self.default_model.is_some()
     }
 
@@ -71,6 +78,9 @@ impl ModelMapping {
 
         // 1. 按模型类型匹配
         if model_lower.contains("fable") {
+            if let Some(ref m) = self.custom_model {
+                return m.clone();
+            }
             if let Some(ref m) = self.fable_model {
                 return m.clone();
             }
@@ -199,7 +209,7 @@ mod tests {
                     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "haiku-mapped",
                     "ANTHROPIC_DEFAULT_SONNET_MODEL": "sonnet-mapped",
                     "ANTHROPIC_DEFAULT_OPUS_MODEL": "opus-mapped",
-                    "ANTHROPIC_DEFAULT_FABLE_MODEL": "fable-mapped"
+                    "ANTHROPIC_CUSTOM_MODEL_OPTION": "custom-fable-mapped"
                 }
             }),
             website_url: None,
@@ -264,8 +274,8 @@ mod tests {
         let provider = create_provider_with_mapping();
         let body = json!({"model": "claude-fable-5"});
         let (result, _, mapped) = apply_model_mapping(body, &provider);
-        assert_eq!(result["model"], "fable-mapped");
-        assert_eq!(mapped, Some("fable-mapped".to_string()));
+        assert_eq!(result["model"], "custom-fable-mapped");
+        assert_eq!(mapped, Some("custom-fable-mapped".to_string()));
     }
 
     #[test]
@@ -274,8 +284,24 @@ mod tests {
         let provider = create_provider_with_mapping();
         let body = json!({"model": "claude-fable-5[1m]"});
         let (result, _, mapped) = apply_model_mapping(body, &provider);
-        assert_eq!(result["model"], "fable-mapped");
-        assert_eq!(mapped, Some("fable-mapped".to_string()));
+        assert_eq!(result["model"], "custom-fable-mapped");
+        assert_eq!(mapped, Some("custom-fable-mapped".to_string()));
+    }
+
+    #[test]
+    fn test_fable_legacy_slot_mapping_when_custom_unset() {
+        let mut provider = create_provider_with_mapping();
+        provider.settings_config = json!({
+            "env": {
+                "ANTHROPIC_MODEL": "default-model",
+                "ANTHROPIC_DEFAULT_OPUS_MODEL": "opus-mapped",
+                "ANTHROPIC_DEFAULT_FABLE_MODEL": "legacy-fable-mapped"
+            }
+        });
+        let body = json!({"model": "claude-fable-5"});
+        let (result, _, mapped) = apply_model_mapping(body, &provider);
+        assert_eq!(result["model"], "legacy-fable-mapped");
+        assert_eq!(mapped, Some("legacy-fable-mapped".to_string()));
     }
 
     #[test]

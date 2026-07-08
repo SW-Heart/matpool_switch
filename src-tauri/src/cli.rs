@@ -403,7 +403,7 @@ async fn set_claude_model_slots(args: &[String]) -> CliResult {
     let updates = parse_claude_model_slot_updates(args)?;
     if updates.is_empty() {
         return Err(
-            "usage: matpool models claude set [--default <model>] [--sonnet <model>] [--opus <model>] [--haiku <model>] [--fable <model>] [--custom <model>]"
+            "usage: matpool models claude set [--default <model>] [--sonnet <model>] [--opus <model>] [--haiku <model>] [--custom <model>]"
                 .to_string(),
         );
     }
@@ -444,12 +444,11 @@ fn load_matpool_claude_provider(db: &Database) -> CliResult<provider::Provider> 
         .ok_or_else(|| "matpool-claude provider is missing. Run: matpool provider seed".to_string())
 }
 
-const CLAUDE_MODEL_SLOT_OPTIONS: [(&str, &str); 6] = [
+const CLAUDE_MODEL_SLOT_OPTIONS: [(&str, &str); 5] = [
     ("default", "ANTHROPIC_MODEL"),
     ("sonnet", "ANTHROPIC_DEFAULT_SONNET_MODEL"),
     ("opus", "ANTHROPIC_DEFAULT_OPUS_MODEL"),
     ("haiku", "ANTHROPIC_DEFAULT_HAIKU_MODEL"),
-    ("fable", "ANTHROPIC_DEFAULT_FABLE_MODEL"),
     ("custom", "ANTHROPIC_CUSTOM_MODEL_OPTION"),
 ];
 
@@ -459,7 +458,6 @@ fn claude_model_slot_display_name(label: &str) -> &'static str {
         "sonnet" => "Claude Sonnet",
         "opus" => "Claude Opus",
         "haiku" => "Claude Haiku",
-        "fable" => "Claude Fable",
         "custom" => "Claude custom",
         _ => "Claude model",
     }
@@ -532,6 +530,7 @@ async fn prompt_claude_model_slots_after_takeover(db: Arc<Database>) -> CliResul
 
     println!();
     println!("Enter a Matpool model ID for each Claude menu position.");
+    println!("Use Claude custom for an extra model, such as GPT-5.5 or Claude-Fable-5.");
     println!("Press Enter to keep the current value. Type '?' to show available model IDs.");
 
     let mut changed = false;
@@ -2550,9 +2549,9 @@ mod cli_tests {
     fn parse_claude_model_slot_updates_accepts_supported_slots() {
         let args = vec![
             "--sonnet".to_string(),
-            "Claude-Sonnet-5".to_string(),
+            "MiMo-V2.5".to_string(),
             "--custom".to_string(),
-            "Claude-Fable-5".to_string(),
+            "GPT-5.5".to_string(),
         ];
 
         let parsed = parse_claude_model_slot_updates(&args).expect("parse updates");
@@ -2563,12 +2562,12 @@ mod cli_tests {
                 (
                     "sonnet",
                     "ANTHROPIC_DEFAULT_SONNET_MODEL",
-                    "Claude-Sonnet-5".to_string()
+                    "MiMo-V2.5".to_string()
                 ),
                 (
                     "custom",
                     "ANTHROPIC_CUSTOM_MODEL_OPTION",
-                    "Claude-Fable-5".to_string()
+                    "GPT-5.5".to_string()
                 ),
             ]
         );
@@ -2576,11 +2575,11 @@ mod cli_tests {
 
     #[test]
     fn canonicalize_claude_model_matches_case_insensitively() {
-        let catalog = vec!["Claude-Sonnet-5".to_string(), "GLM-5.2".to_string()];
+        let catalog = vec!["MiMo-V2.5".to_string(), "GLM-5.2".to_string()];
 
         assert_eq!(
-            canonicalize_claude_model("claude-sonnet-5", &catalog),
-            Some("Claude-Sonnet-5".to_string())
+            canonicalize_claude_model("mimo-v2.5", &catalog),
+            Some("MiMo-V2.5".to_string())
         );
         assert_eq!(canonicalize_claude_model("missing", &catalog), None);
     }
@@ -2594,20 +2593,16 @@ mod cli_tests {
             None,
         );
 
-        set_claude_provider_env_model(
-            &mut provider,
-            "ANTHROPIC_CUSTOM_MODEL_OPTION",
-            "Claude-Fable-5",
-        );
+        set_claude_provider_env_model(&mut provider, "ANTHROPIC_CUSTOM_MODEL_OPTION", "GPT-5.5");
 
         let env = provider.settings_config["env"].as_object().expect("env");
         assert_eq!(
             env["ANTHROPIC_CUSTOM_MODEL_OPTION"],
-            Value::String("Claude-Fable-5".to_string())
+            Value::String("GPT-5.5".to_string())
         );
         assert_eq!(
             env["ANTHROPIC_CUSTOM_MODEL_OPTION_NAME"],
-            Value::String("Claude-Fable-5".to_string())
+            Value::String("GPT-5.5".to_string())
         );
     }
 }

@@ -32,7 +32,7 @@ const PROXY_TOKEN_PLACEHOLDER: &str = "PROXY_MANAGED";
 /// 原因：接管模式下 `*_MODEL` 必须由 Matpool Switch 写成稳定的 Claude 角色别名，
 /// 再由本地代理映射到当前供应商真实模型；`*_MODEL_NAME` 也需要同步接管，
 /// 否则 Claude Code 模型菜单会残留上一个供应商的显示名称。
-const CLAUDE_MODEL_OVERRIDE_ENV_KEYS: [&str; 11] = [
+const CLAUDE_MODEL_OVERRIDE_ENV_KEYS: [&str; 13] = [
     "ANTHROPIC_MODEL",
     "ANTHROPIC_REASONING_MODEL", // legacy: 已废弃，但旧配置可能残留
     "ANTHROPIC_DEFAULT_HAIKU_MODEL",
@@ -43,6 +43,8 @@ const CLAUDE_MODEL_OVERRIDE_ENV_KEYS: [&str; 11] = [
     "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME",
     "ANTHROPIC_DEFAULT_FABLE_MODEL",
     "ANTHROPIC_DEFAULT_FABLE_MODEL_NAME",
+    "ANTHROPIC_CUSTOM_MODEL_OPTION",
+    "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME",
     // Legacy key (已废弃)：历史版本使用该字段区分 small/fast 模型
     "ANTHROPIC_SMALL_FAST_MODEL",
 ];
@@ -50,7 +52,6 @@ const CLAUDE_MODEL_OVERRIDE_ENV_KEYS: [&str; 11] = [
 const CLAUDE_TAKEOVER_HAIKU_MODEL: &str = "claude-haiku-4-5";
 const CLAUDE_TAKEOVER_SONNET_MODEL: &str = "claude-sonnet-4-6";
 const CLAUDE_TAKEOVER_OPUS_MODEL: &str = "claude-opus-4-8";
-const CLAUDE_TAKEOVER_FABLE_MODEL: &str = "claude-fable-5";
 // 写给 Claude Code 时沿用文档示例的大写形式；解析侧大小写不敏感。
 const CLAUDE_ONE_M_MARKER_FOR_CLIENT: &str = "[1M]";
 
@@ -230,10 +231,8 @@ impl ProxyService {
         let opus_model = Self::claude_env_string(env, "ANTHROPIC_DEFAULT_OPUS_MODEL")
             .or(default_model)
             .or(small_fast_model);
-        let fable_model = Self::claude_env_string(env, "ANTHROPIC_DEFAULT_FABLE_MODEL")
-            .or(opus_model)
-            .or(default_model)
-            .or(small_fast_model);
+        let custom_model = Self::claude_env_string(env, "ANTHROPIC_CUSTOM_MODEL_OPTION")
+            .or_else(|| Self::claude_env_string(env, "ANTHROPIC_DEFAULT_FABLE_MODEL"));
 
         let mut fields = Vec::with_capacity(8);
         Self::push_claude_takeover_role_fields(
@@ -263,15 +262,14 @@ impl ProxyService {
             true,
             opus_model,
         );
-        Self::push_claude_takeover_role_fields(
-            &mut fields,
-            env,
-            "ANTHROPIC_DEFAULT_FABLE_MODEL",
-            "ANTHROPIC_DEFAULT_FABLE_MODEL_NAME",
-            CLAUDE_TAKEOVER_FABLE_MODEL,
-            true,
-            fable_model,
-        );
+        if let Some(custom_model) = custom_model {
+            fields.push(("ANTHROPIC_CUSTOM_MODEL_OPTION", custom_model.to_string()));
+            let custom_display_name =
+                Self::claude_env_string(env, "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME")
+                    .map(str::to_string)
+                    .unwrap_or_else(|| Self::strip_claude_one_m_marker(custom_model));
+            fields.push(("ANTHROPIC_CUSTOM_MODEL_OPTION_NAME", custom_display_name));
+        }
         fields
     }
 
@@ -2961,7 +2959,7 @@ mod tests {
                     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-4.5",
                     "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-4.6",
                     "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-sonnet-4.6",
-                    "ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-fable-5"
+                    "ANTHROPIC_CUSTOM_MODEL_OPTION": "Claude-Fable-5"
                 }
             }),
             None,
@@ -2983,7 +2981,9 @@ mod tests {
                 "ANTHROPIC_DEFAULT_OPUS_MODEL": "stale-opus",
                 "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME": "Stale Opus",
                 "ANTHROPIC_DEFAULT_FABLE_MODEL": "stale-fable",
-                "ANTHROPIC_DEFAULT_FABLE_MODEL_NAME": "Stale Fable"
+                "ANTHROPIC_DEFAULT_FABLE_MODEL_NAME": "Stale Fable",
+                "ANTHROPIC_CUSTOM_MODEL_OPTION": "stale-custom",
+                "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME": "Stale custom"
             }
         });
         ProxyService::apply_claude_takeover_fields_for_provider(
@@ -3023,11 +3023,13 @@ mod tests {
             "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME",
             Some("claude-sonnet-4.6"),
         );
-        assert_env_str(env, "ANTHROPIC_DEFAULT_FABLE_MODEL", Some("claude-fable-5"));
+        assert_env_str(env, "ANTHROPIC_DEFAULT_FABLE_MODEL", None);
+        assert_env_str(env, "ANTHROPIC_DEFAULT_FABLE_MODEL_NAME", None);
+        assert_env_str(env, "ANTHROPIC_CUSTOM_MODEL_OPTION", Some("Claude-Fable-5"));
         assert_env_str(
             env,
-            "ANTHROPIC_DEFAULT_FABLE_MODEL_NAME",
-            Some("claude-fable-5"),
+            "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME",
+            Some("Claude-Fable-5"),
         );
         assert_env_str(env, "ANTHROPIC_API_KEY", Some(PROXY_TOKEN_PLACEHOLDER));
         assert_env_str(env, "ANTHROPIC_AUTH_TOKEN", None);
@@ -3045,7 +3047,7 @@ mod tests {
                     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "gpt-5.4-mini",
                     "ANTHROPIC_DEFAULT_SONNET_MODEL": "gpt-5.4",
                     "ANTHROPIC_DEFAULT_OPUS_MODEL": "gpt-5.4",
-                    "ANTHROPIC_DEFAULT_FABLE_MODEL": "gpt-5.4-pro"
+                    "ANTHROPIC_CUSTOM_MODEL_OPTION": "gpt-5.4-pro"
                 }
             }),
             None,
@@ -3067,7 +3069,9 @@ mod tests {
                 "ANTHROPIC_DEFAULT_OPUS_MODEL": "stale-opus",
                 "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME": "Stale Opus",
                 "ANTHROPIC_DEFAULT_FABLE_MODEL": "stale-fable",
-                "ANTHROPIC_DEFAULT_FABLE_MODEL_NAME": "Stale Fable"
+                "ANTHROPIC_DEFAULT_FABLE_MODEL_NAME": "Stale Fable",
+                "ANTHROPIC_CUSTOM_MODEL_OPTION": "stale-custom",
+                "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME": "Stale custom"
             }
         });
         ProxyService::apply_claude_takeover_fields_for_provider(
@@ -3099,10 +3103,12 @@ mod tests {
         assert_env_str(env, "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME", Some("gpt-5.4"));
         assert_env_str(env, "ANTHROPIC_DEFAULT_OPUS_MODEL", Some("claude-opus-4-8"));
         assert_env_str(env, "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME", Some("gpt-5.4"));
-        assert_env_str(env, "ANTHROPIC_DEFAULT_FABLE_MODEL", Some("claude-fable-5"));
+        assert_env_str(env, "ANTHROPIC_DEFAULT_FABLE_MODEL", None);
+        assert_env_str(env, "ANTHROPIC_DEFAULT_FABLE_MODEL_NAME", None);
+        assert_env_str(env, "ANTHROPIC_CUSTOM_MODEL_OPTION", Some("gpt-5.4-pro"));
         assert_env_str(
             env,
-            "ANTHROPIC_DEFAULT_FABLE_MODEL_NAME",
+            "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME",
             Some("gpt-5.4-pro"),
         );
         assert_env_str(env, "ANTHROPIC_API_KEY", Some(PROXY_TOKEN_PLACEHOLDER));
