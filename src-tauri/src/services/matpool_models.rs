@@ -10,7 +10,7 @@ use crate::app_config::AppType;
 use crate::database::Database;
 use crate::provider::Provider;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 const MATPOOL_PRICING_URL: &str = "https://token.matpool.com/api/pricing";
 const CODEX_DEFAULT_CONTEXT_WINDOW: u64 = 128_000;
@@ -189,6 +189,13 @@ fn sync_claude_provider(
         model_names,
         preferred_claude_fable_model,
     );
+    changed |= ensure_env_model(
+        provider,
+        "ANTHROPIC_CUSTOM_MODEL_OPTION",
+        model_names,
+        preferred_claude_custom_model,
+    );
+    changed |= ensure_env_model_name(provider, "ANTHROPIC_CUSTOM_MODEL_OPTION");
     changed |= set_model_catalog(provider, model_names);
     if let Some(model) = read_env_model(provider, "ANTHROPIC_MODEL") {
         defaults.push(("claude".to_string(), model));
@@ -298,6 +305,24 @@ fn read_env_model(provider: &Provider, key: &str) -> Option<String> {
         .map(ToString::to_string)
 }
 
+fn ensure_env_model_name(provider: &mut Provider, model_key: &str) -> bool {
+    let Some(model) = read_env_model(provider, model_key) else {
+        return false;
+    };
+    let name_key = format!("{model_key}_NAME");
+    let root = ensure_settings_object(&mut provider.settings_config);
+    let env = root.entry("env".to_string()).or_insert_with(|| json!({}));
+    if !env.is_object() {
+        *env = json!({});
+    }
+    let env_obj = env.as_object_mut().expect("env object just initialized");
+    if env_obj.get(&name_key).and_then(|v| v.as_str()) == Some(model.as_str()) {
+        return false;
+    }
+    env_obj.insert(name_key, Value::String(model));
+    true
+}
+
 fn select_existing_or_preferred(
     current: Option<&str>,
     model_names: &[String],
@@ -338,6 +363,18 @@ fn preferred_claude_haiku_model(model_names: &[String]) -> Option<String> {
 
 fn preferred_claude_fable_model(model_names: &[String]) -> Option<String> {
     find_first_containing(model_names, &["claude", "fable"])
+}
+
+fn preferred_claude_custom_model(model_names: &[String]) -> Option<String> {
+    preferred_claude_fable_model(model_names).or_else(|| {
+        model_names
+            .iter()
+            .find(|model| {
+                let lower = model.to_lowercase();
+                !lower.contains("sonnet") && !lower.contains("opus") && !lower.contains("haiku")
+            })
+            .cloned()
+    })
 }
 
 fn preferred_codex_model(model_names: &[String]) -> Option<String> {
@@ -485,18 +522,22 @@ mod tests {
             env["ANTHROPIC_DEFAULT_FABLE_MODEL"],
             Value::String("Claude-Fable-5".to_string())
         );
+        assert_eq!(
+            env["ANTHROPIC_CUSTOM_MODEL_OPTION"],
+            Value::String("Claude-Fable-5".to_string())
+        );
+        assert_eq!(
+            env["ANTHROPIC_CUSTOM_MODEL_OPTION_NAME"],
+            Value::String("Claude-Fable-5".to_string())
+        );
         let catalog_models = provider.settings_config["modelCatalog"]["models"]
             .as_array()
             .expect("catalog models");
-        assert!(
-            catalog_models
-                .iter()
-                .any(|entry| entry["model"] == Value::String("Claude-Sonnet-5".to_string()))
-        );
-        assert!(
-            catalog_models
-                .iter()
-                .any(|entry| entry["model"] == Value::String("Claude-Fable-5".to_string()))
-        );
+        assert!(catalog_models
+            .iter()
+            .any(|entry| entry["model"] == Value::String("Claude-Sonnet-5".to_string())));
+        assert!(catalog_models
+            .iter()
+            .any(|entry| entry["model"] == Value::String("Claude-Fable-5".to_string())));
     }
 }

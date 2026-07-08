@@ -665,8 +665,8 @@ requires_openai_auth = true
         ProviderService::update(&state, AppType::Codex, None, updated)
             .expect("update current codex provider");
 
-        let live_config = std::fs::read_to_string(get_codex_config_path())
-            .expect("read live codex config");
+        let live_config =
+            std::fs::read_to_string(get_codex_config_path()).expect("read live codex config");
         let parsed: toml::Value =
             toml::from_str(&live_config).expect("live config.toml must be valid TOML");
 

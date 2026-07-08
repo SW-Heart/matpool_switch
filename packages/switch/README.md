@@ -44,17 +44,22 @@ matpool takeover all
 matpool status
 ```
 
-The local proxy must keep running while takeover is enabled. You can run it
-through the daemon or by keeping the Matpool Switch desktop app open.
+Claude Code takeover can run without the local proxy when the current Claude
+provider uses Matpool's native Anthropic format. Codex, Gemini, and Claude
+providers that need protocol conversion use the local proxy, so keep the daemon
+or the Matpool Switch desktop app running for those modes.
 
 ## What Takeover Changes
 
-Takeover points supported tools at the local proxy on `127.0.0.1:15721`.
 Matpool Switch writes managed settings for:
 
 - Claude Code / Claude Desktop: `~/.claude/settings.json`
 - Codex CLI: `~/.codex/auth.json` and `~/.codex/config.toml`
 - Gemini CLI: `~/.gemini/.env`
+
+Codex, Gemini, and conversion-based Claude providers point at the local proxy on
+`127.0.0.1:15721`. Matpool's native Claude provider is written directly to
+Claude Code settings and does not require the local proxy.
 
 The Matpool token is stored in the OS keychain using service `Matpool Switch`
 and account `matpool-token`. It is not written into tool config files.
@@ -74,9 +79,13 @@ matpool status
 matpool doctor
 matpool models list
 matpool models sync all
+matpool models claude
+matpool models claude list
+matpool models claude set --sonnet <matpool_model_id> --custom <matpool_model_id>
 matpool provider list all
 matpool provider seed
 matpool takeover all
+matpool takeover claude
 matpool takeover all --disable
 matpool daemon status
 matpool update
@@ -84,6 +93,45 @@ matpool update
 
 On first run, the CLI initializes the local Matpool Switch database, built-in
 providers, and missing minimal tool config files needed for takeover.
+
+## Claude Model Selection
+
+After `matpool takeover claude`, the CLI shows the Matpool model IDs currently
+assigned to Claude Code's `/model` menu:
+
+```text
+Current Claude model configuration:
+  Claude default   Claude-Sonnet-5
+  Claude Sonnet    Claude-Sonnet-5
+  Claude Opus      Claude-Opus-4.8
+  Claude Haiku     Claude-Haiku-4.5
+  Claude Fable     Claude-Fable-5
+  Claude custom    Claude-Fable-5
+
+Use current Claude model configuration? [Y/n]:
+```
+
+Press Enter to keep the defaults. Type `n` to edit each Claude menu position in
+order. For each prompt, enter a Matpool model ID and press Enter to save that
+slot immediately:
+
+```text
+Claude default [Claude-Sonnet-5]: <matpool_model_id>
+Claude default saved: <matpool_model_id>
+Claude Sonnet [Claude-Sonnet-5]: <matpool_model_id>
+Claude Sonnet saved: <matpool_model_id>
+```
+
+Press Enter on an empty value to keep the current model. Type `?` at any slot
+prompt to show available Matpool model IDs.
+
+You can change the same configuration later:
+
+```bash
+matpool models claude list
+matpool models claude set --sonnet <matpool_model_id>
+matpool models claude set --default <matpool_model_id> --custom <matpool_model_id>
+```
 
 ## Troubleshooting
 
@@ -93,6 +141,9 @@ providers, and missing minimal tool config files needed for takeover.
   or incomplete.
 - `matpool models sync all`: refreshes the Matpool model catalog for supported
   tools.
+- `matpool models claude`: shows the current Claude menu position to Matpool
+  model ID mapping.
+- `matpool models claude set`: updates Claude Code model slots after takeover.
 - If a tool cannot connect, confirm the daemon is running with
   `matpool daemon status`.
 - If you want to stop using the local proxy, run

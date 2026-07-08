@@ -57,7 +57,7 @@ use std::env;
 use std::fs;
 #[cfg(target_os = "windows")]
 use std::fs::OpenOptions;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::net::{SocketAddr, TcpStream};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -129,6 +129,9 @@ Usage:
   matpool doctor                       Check key files and local state
   matpool models list                  List Matpool TEXT/CODE models
   matpool models sync [app|all]        Sync Matpool models into CLI providers
+  matpool models claude                Show Claude model slot config
+  matpool models claude list           List synced Matpool Claude models
+  matpool models claude set [options]  Set Claude model slots, then sync live config
   matpool provider list [app|all]      List configured providers
   matpool provider seed                Ensure built-in Matpool/official providers exist
   matpool takeover <app|all>           Enable local proxy takeover for an app
@@ -316,16 +319,360 @@ async fn models_cli(args: &[String]) -> CliResult {
             let apps = expand_app_types(app)?;
             let outcome =
                 services::matpool_models::sync_matpool_models_for_apps(&db, &apps).await?;
+            sync_claude_live_after_model_sync(db.clone(), &apps).await?;
             sync_codex_live_after_model_sync(db.clone(), &apps).await?;
             print_model_sync_outcome(&outcome);
         }
+        "claude" => claude_models_cli(&args[1..]).await?,
         unknown => {
             return Err(format!(
-                "unknown models command '{unknown}'. Usage: matpool models list | matpool models sync [app|all]"
+                "unknown models command '{unknown}'. Usage: matpool models list | matpool models sync [app|all] | matpool models claude [list|set]"
             ));
         }
     }
     Ok(())
+}
+
+async fn claude_models_cli(args: &[String]) -> CliResult {
+    let command = args.first().map(String::as_str).unwrap_or("show");
+    match command {
+        "show" | "status" => show_claude_model_slots()?,
+        "list" | "ls" => list_claude_model_catalog()?,
+        "set" => set_claude_model_slots(&args[1..]).await?,
+        unknown => {
+            return Err(format!(
+                "unknown Claude models command '{unknown}'. Usage: matpool models claude [show|list|set]"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn show_claude_model_slots() -> CliResult {
+    let db = init_db()?;
+    let provider = load_matpool_claude_provider(&db)?;
+    print_claude_model_slots(&provider);
+    println!();
+    println!("These values are Matpool model IDs. Change them with:");
+    println!("  matpool models claude set --sonnet <model> --opus <model> --haiku <model>");
+    println!("  matpool models claude set --default <model> --custom <model>");
+    Ok(())
+}
+
+fn list_claude_model_catalog() -> CliResult {
+    let db = init_db()?;
+    let provider = load_matpool_claude_provider(&db)?;
+    let models = claude_catalog_model_names(&provider);
+    if models.is_empty() {
+        println!("No synced Matpool Claude model catalog found.");
+        println!("Run: matpool models sync claude");
+        return Ok(());
+    }
+    println!("Synced Matpool Claude models:");
+    for model in models {
+        println!("  - {model}");
+    }
+    Ok(())
+}
+
+async fn set_claude_model_slots(args: &[String]) -> CliResult {
+    let db = init_db()?;
+    let mut provider = load_matpool_claude_provider(&db)?;
+    let updates = parse_claude_model_slot_updates(args)?;
+    if updates.is_empty() {
+        return Err(
+            "usage: matpool models claude set [--default <model>] [--sonnet <model>] [--opus <model>] [--haiku <model>] [--fable <model>] [--custom <model>]"
+                .to_string(),
+        );
+    }
+
+    let catalog = claude_catalog_model_names(&provider);
+    for (label, _, requested) in &updates {
+        canonicalize_claude_model(requested, &catalog).ok_or_else(|| {
+            if catalog.is_empty() {
+                format!(
+                    "Claude model catalog is empty. Run 'matpool models sync claude' before setting {label}."
+                )
+            } else {
+                format!(
+                    "unknown Matpool Claude model for {label}: {requested}. Run 'matpool models claude list' to see available models."
+                )
+            }
+        })?;
+    }
+
+    for (_, env_key, requested) in updates {
+        let model = canonicalize_claude_model(&requested, &catalog).unwrap_or(requested);
+        set_claude_provider_env_model(&mut provider, env_key, &model);
+    }
+
+    db.save_provider(AppType::Claude.as_str(), &provider)
+        .map_err(|e| e.to_string())?;
+
+    let apps = [AppType::Claude];
+    sync_claude_live_after_model_sync(db.clone(), &apps).await?;
+    println!("Matpool Claude model slots updated.");
+    println!("Run '/model' in Claude Code after restarting or reloading Claude Code if it was already open.");
+    Ok(())
+}
+
+fn load_matpool_claude_provider(db: &Database) -> CliResult<provider::Provider> {
+    db.get_provider_by_id("matpool-claude", AppType::Claude.as_str())
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "matpool-claude provider is missing. Run: matpool provider seed".to_string())
+}
+
+const CLAUDE_MODEL_SLOT_OPTIONS: [(&str, &str); 6] = [
+    ("default", "ANTHROPIC_MODEL"),
+    ("sonnet", "ANTHROPIC_DEFAULT_SONNET_MODEL"),
+    ("opus", "ANTHROPIC_DEFAULT_OPUS_MODEL"),
+    ("haiku", "ANTHROPIC_DEFAULT_HAIKU_MODEL"),
+    ("fable", "ANTHROPIC_DEFAULT_FABLE_MODEL"),
+    ("custom", "ANTHROPIC_CUSTOM_MODEL_OPTION"),
+];
+
+fn claude_model_slot_display_name(label: &str) -> &'static str {
+    match label {
+        "default" => "Claude default",
+        "sonnet" => "Claude Sonnet",
+        "opus" => "Claude Opus",
+        "haiku" => "Claude Haiku",
+        "fable" => "Claude Fable",
+        "custom" => "Claude custom",
+        _ => "Claude model",
+    }
+}
+
+fn print_claude_model_slots(provider: &provider::Provider) {
+    println!("Current Claude model configuration:");
+    for (label, env_key) in CLAUDE_MODEL_SLOT_OPTIONS {
+        let value = read_claude_provider_env_model(provider, env_key).unwrap_or_else(|| "-".into());
+        println!("  {:<16} {}", claude_model_slot_display_name(label), value);
+    }
+}
+
+fn read_claude_provider_env_model(provider: &provider::Provider, env_key: &str) -> Option<String> {
+    provider
+        .settings_config
+        .pointer(&format!("/env/{env_key}"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+async fn prompt_claude_model_slots_after_takeover(db: Arc<Database>) -> CliResult {
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        let provider = load_matpool_claude_provider(db.as_ref())?;
+        print_claude_model_slots(&provider);
+        println!();
+        println!("Change Matpool model IDs later with:");
+        println!("  matpool models claude list");
+        println!("  matpool models claude set --sonnet <model> --custom <model>");
+        return Ok(());
+    }
+
+    let mut provider = load_matpool_claude_provider(db.as_ref())?;
+    let catalog = claude_catalog_model_names(&provider);
+    if catalog.is_empty() {
+        print_claude_model_slots(&provider);
+        println!();
+        println!("No Matpool model catalog is synced yet. Run: matpool models sync claude");
+        return Ok(());
+    }
+
+    println!();
+    print_claude_model_slots(&provider);
+    println!();
+    println!("These are Matpool model IDs used by Claude Code's /model menu.");
+    println!("Press Enter to use the current defaults, or type 'n' to edit them now.");
+    print!("Use current Claude model configuration? [Y/n]: ");
+    io::stdout()
+        .flush()
+        .map_err(|e| format!("failed to flush stdout: {e}"))?;
+
+    let mut answer = String::new();
+    io::stdin()
+        .read_line(&mut answer)
+        .map_err(|e| format!("failed to read input: {e}"))?;
+    let answer = answer.trim();
+    if answer.is_empty() || answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes") {
+        println!("Keeping current Claude model configuration.");
+        println!(
+            "Change it later with: matpool models claude set --sonnet <model> --custom <model>"
+        );
+        return Ok(());
+    }
+    if !(answer.eq_ignore_ascii_case("n") || answer.eq_ignore_ascii_case("no")) {
+        println!("Unrecognized answer; keeping current Claude model configuration.");
+        return Ok(());
+    }
+
+    println!();
+    println!("Enter a Matpool model ID for each Claude menu position.");
+    println!("Press Enter to keep the current value. Type '?' to show available model IDs.");
+
+    let mut changed = false;
+    for (label, env_key) in CLAUDE_MODEL_SLOT_OPTIONS {
+        let display_name = claude_model_slot_display_name(label);
+        let current = read_claude_provider_env_model(&provider, env_key).unwrap_or_default();
+        if let Some(model) = prompt_for_claude_model_id(display_name, current.as_str(), &catalog)? {
+            set_claude_provider_env_model(&mut provider, env_key, &model);
+            db.save_provider(AppType::Claude.as_str(), &provider)
+                .map_err(|e| e.to_string())?;
+            let apps = [AppType::Claude];
+            sync_claude_live_after_model_sync(db.clone(), &apps).await?;
+            println!("{display_name} saved: {model}");
+            changed = true;
+        } else if current.is_empty() {
+            println!("{display_name} kept unset.");
+        } else {
+            println!("{display_name} kept: {current}");
+        }
+    }
+
+    if changed {
+        println!("Claude model configuration updated.");
+    } else {
+        println!("Claude model configuration unchanged.");
+    }
+    println!("Run '/model' in Claude Code after restarting or reloading Claude Code if it was already open.");
+    Ok(())
+}
+
+fn prompt_for_claude_model_id(
+    display_name: &str,
+    current: &str,
+    catalog: &[String],
+) -> CliResult<Option<String>> {
+    loop {
+        print!("{display_name} [{current}]: ");
+        io::stdout()
+            .flush()
+            .map_err(|e| format!("failed to flush stdout: {e}"))?;
+
+        let mut input = String::new();
+        io::stdin()
+            .read_line(&mut input)
+            .map_err(|e| format!("failed to read input: {e}"))?;
+        let requested = input.trim();
+        if requested.is_empty() {
+            return Ok(None);
+        }
+        if requested == "?" {
+            print_claude_model_catalog_sample(catalog);
+            continue;
+        }
+        if let Some(model) = canonicalize_claude_model(requested, catalog) {
+            return Ok(Some(model));
+        }
+        println!(
+            "Unknown Matpool model ID: {requested}. Type '?' to show available model IDs, or press Enter to keep current."
+        );
+    }
+}
+
+fn print_claude_model_catalog_sample(catalog: &[String]) {
+    println!("Available Matpool model IDs:");
+    for model in catalog.iter().take(80) {
+        println!("  - {model}");
+    }
+    if catalog.len() > 80 {
+        println!(
+            "  ... {} more. Run 'matpool models claude list' to see all.",
+            catalog.len() - 80
+        );
+    }
+}
+
+fn parse_claude_model_slot_updates(
+    args: &[String],
+) -> CliResult<Vec<(&'static str, &'static str, String)>> {
+    let mut updates = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index].as_str();
+        let Some((label, env_key)) = claude_model_slot_for_option(arg) else {
+            return Err(format!("unknown Claude model slot option '{arg}'"));
+        };
+        let Some(value) = args.get(index + 1) else {
+            return Err(format!("missing model value after {arg}"));
+        };
+        if value.trim().is_empty() || value.starts_with("--") {
+            return Err(format!("missing model value after {arg}"));
+        }
+        updates.push((label, env_key, value.trim().to_string()));
+        index += 2;
+    }
+    Ok(updates)
+}
+
+fn claude_model_slot_for_option(option: &str) -> Option<(&'static str, &'static str)> {
+    let normalized = option.trim_start_matches('-');
+    if normalized == "model" {
+        return Some(("default", "ANTHROPIC_MODEL"));
+    }
+    CLAUDE_MODEL_SLOT_OPTIONS
+        .iter()
+        .copied()
+        .find(|(label, _)| *label == normalized)
+}
+
+fn claude_catalog_model_names(provider: &provider::Provider) -> Vec<String> {
+    provider
+        .settings_config
+        .pointer("/modelCatalog/models")
+        .and_then(serde_json::Value::as_array)
+        .map(|models| {
+            models
+                .iter()
+                .filter_map(|entry| entry.get("model").and_then(serde_json::Value::as_str))
+                .map(str::trim)
+                .filter(|model| !model.is_empty())
+                .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn canonicalize_claude_model(requested: &str, catalog: &[String]) -> Option<String> {
+    let requested = requested.trim();
+    if requested.is_empty() {
+        return None;
+    }
+    catalog
+        .iter()
+        .find(|model| model == &requested)
+        .cloned()
+        .or_else(|| {
+            catalog
+                .iter()
+                .find(|model| model.eq_ignore_ascii_case(requested))
+                .cloned()
+        })
+}
+
+fn set_claude_provider_env_model(provider: &mut provider::Provider, env_key: &str, model: &str) {
+    if !provider.settings_config.is_object() {
+        provider.settings_config = serde_json::json!({});
+    }
+    let root = provider
+        .settings_config
+        .as_object_mut()
+        .expect("settings object just initialized");
+    let env = root
+        .entry("env".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    if !env.is_object() {
+        *env = serde_json::json!({});
+    }
+    let env_obj = env.as_object_mut().expect("env object just initialized");
+    env_obj.insert(
+        env_key.to_string(),
+        serde_json::Value::String(model.to_string()),
+    );
+    let name_key = format!("{env_key}_NAME");
+    env_obj.insert(name_key, serde_json::Value::String(model.to_string()));
 }
 
 fn provider_list(app: Option<&str>) -> CliResult {
@@ -371,36 +718,59 @@ async fn takeover(args: &[String]) -> CliResult {
     let enabled = !args.iter().any(|arg| arg == "--disable");
     let db = init_db()?;
     let state = AppState::new(db);
+    let app_keys = expand_apps(app)?;
+    let proxy_app_keys = proxy_takeover_apps(&state.db, &app_keys)?;
 
     if enabled {
-        let app_keys = expand_apps(app)?;
         sync_matpool_models_best_effort(&state.db, &app_keys).await;
         ensure_live_configs_for_apps(&app_keys)?;
-        let db_state = read_db_state().unwrap_or_default();
-        if probe_proxy_health(db_state.proxy_addr())?.is_none() {
-            return Err(
-                "local proxy daemon is not running. Start it first with: matpool daemon start"
-                    .to_string(),
-            );
+        if !proxy_app_keys.is_empty() {
+            let db_state = read_db_state().unwrap_or_default();
+            if probe_proxy_health(db_state.proxy_addr())?.is_none() {
+                return Err(
+                    "local proxy daemon is not running. Start it first with: matpool daemon start"
+                        .to_string(),
+                );
+            }
         }
     }
 
-    set_takeover_apps(&state, &expand_apps(app)?, enabled).await?;
+    if enabled {
+        set_takeover_apps(&state, &proxy_app_keys, true).await?;
+        if app_keys.contains(&AppType::Claude.as_str())
+            && !proxy_app_keys.iter().any(|key| key == "claude")
+        {
+            enable_claude_direct_takeover(&state).await?;
+        }
+        if app_keys.contains(&AppType::Claude.as_str()) {
+            prompt_claude_model_slots_after_takeover(state.db.clone()).await?;
+        }
+    } else {
+        let disable_app_keys: Vec<String> = app_keys.iter().map(|key| key.to_string()).collect();
+        set_takeover_apps(&state, &disable_app_keys, false).await?;
+    }
 
     if enabled {
-        println!();
-        println!("Note: takeover points managed tools at the local Matpool proxy.");
-        println!("Keep the Matpool daemon or desktop app running while takeover is enabled.");
+        if proxy_app_keys.is_empty() {
+            println!();
+            println!(
+                "Note: Claude was synced directly; no local proxy is required for this provider."
+            );
+        } else {
+            println!();
+            println!("Note: takeover points managed tools at the local Matpool proxy.");
+            println!("Keep the Matpool daemon or desktop app running while takeover is enabled.");
+        }
     }
 
     Ok(())
 }
 
-async fn set_takeover_apps(state: &AppState, apps: &[&str], enabled: bool) -> CliResult {
+async fn set_takeover_apps(state: &AppState, apps: &[String], enabled: bool) -> CliResult {
     for app_key in apps {
         state
             .proxy_service
-            .set_takeover_for_app_without_managing_proxy(app_key, enabled)
+            .set_takeover_for_app_without_managing_proxy(app_key.as_str(), enabled)
             .await?;
         println!(
             "{} takeover {}.",
@@ -408,6 +778,105 @@ async fn set_takeover_apps(state: &AppState, apps: &[&str], enabled: bool) -> Cl
             if enabled { "enabled" } else { "disabled" }
         );
     }
+    Ok(())
+}
+
+fn proxy_takeover_apps(db: &Database, apps: &[&str]) -> CliResult<Vec<String>> {
+    let mut proxy_apps = Vec::new();
+    for app_key in apps {
+        if *app_key == AppType::Claude.as_str() && !current_claude_provider_requires_proxy(db)? {
+            continue;
+        }
+        proxy_apps.push((*app_key).to_string());
+    }
+    Ok(proxy_apps)
+}
+
+fn current_claude_provider_requires_proxy(db: &Database) -> CliResult<bool> {
+    let Some(provider) = current_provider_for_app(db, &AppType::Claude)? else {
+        return Ok(true);
+    };
+    Ok(claude_provider_requires_proxy(&provider))
+}
+
+fn current_provider_for_app(db: &Database, app: &AppType) -> CliResult<Option<provider::Provider>> {
+    let Some(provider_id) = settings::get_effective_current_provider(db, app)
+        .map_err(|e| format!("failed to get current {} provider: {e}", app.as_str()))?
+    else {
+        return Ok(None);
+    };
+    db.get_provider_by_id(&provider_id, app.as_str())
+        .map_err(|e| format!("failed to load current {} provider: {e}", app.as_str()))
+}
+
+fn claude_provider_requires_proxy(provider: &provider::Provider) -> bool {
+    if provider.is_github_copilot() || provider.uses_managed_account_auth() {
+        return true;
+    }
+    if provider
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.is_full_url)
+        .unwrap_or(false)
+        || provider
+            .settings_config
+            .get("isFullUrl")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+    {
+        return true;
+    }
+
+    let api_format = provider
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.api_format.as_deref())
+        .or_else(|| {
+            provider
+                .settings_config
+                .get("apiFormat")
+                .and_then(serde_json::Value::as_str)
+        })
+        .or_else(|| {
+            provider
+                .settings_config
+                .get("api_format")
+                .and_then(serde_json::Value::as_str)
+        })
+        .unwrap_or("anthropic");
+    matches!(
+        api_format,
+        "openai_chat" | "openai_responses" | "gemini_native"
+    )
+}
+
+async fn enable_claude_direct_takeover(state: &AppState) -> CliResult {
+    let proxy_enabled = state
+        .db
+        .get_proxy_config_for_app(AppType::Claude.as_str())
+        .await
+        .map(|config| config.enabled)
+        .unwrap_or(false);
+    if proxy_enabled {
+        state
+            .proxy_service
+            .set_takeover_for_app_without_managing_proxy(AppType::Claude.as_str(), false)
+            .await?;
+    }
+    sync_claude_live_from_current_provider(state.db.as_ref()).await?;
+    println!("claude takeover enabled directly.");
+    Ok(())
+}
+
+async fn sync_claude_live_from_current_provider(db: &Database) -> CliResult {
+    let Some(provider) = current_provider_for_app(db, &AppType::Claude)? else {
+        return Err("Claude current provider is not configured".to_string());
+    };
+    if claude_provider_requires_proxy(&provider) {
+        return Err("Claude current provider requires the local proxy".to_string());
+    }
+    services::provider::write_live_with_common_config(db, &AppType::Claude, &provider)
+        .map_err(|e| format!("failed to write Claude live config: {e}"))?;
     Ok(())
 }
 
@@ -1263,25 +1732,46 @@ async fn setup(args: &[String]) -> CliResult {
         }
     }
 
-    if !options.skip_daemon {
+    let setup_db = if options.skip_takeover {
+        None
+    } else {
+        Some(init_db()?)
+    };
+    let proxy_app_keys = if let Some(db) = setup_db.as_ref() {
+        proxy_takeover_apps(db, &options.apps)?
+    } else {
+        Vec::new()
+    };
+    let daemon_required =
+        !options.skip_daemon && (options.skip_takeover || !proxy_app_keys.is_empty());
+
+    if daemon_required {
         daemon_install()?;
         daemon_start_service()?;
         std::thread::sleep(Duration::from_millis(500));
+    } else if !options.skip_daemon {
+        println!("Matpool daemon skipped; selected takeover apps do not require the local proxy.");
     }
 
-    if !options.skip_takeover {
-        let db = init_db()?;
+    if let Some(db) = setup_db {
         sync_matpool_models_best_effort(&db, &options.apps).await;
         ensure_live_configs_for_apps(&options.apps)?;
-        let db_state = read_db_state().unwrap_or_default();
-        if probe_proxy_health(db_state.proxy_addr())?.is_none() {
-            return Err(
-                "local proxy daemon is not running. Run: matpool daemon start, then retry setup"
-                    .to_string(),
-            );
+        if !proxy_app_keys.is_empty() {
+            let db_state = read_db_state().unwrap_or_default();
+            if probe_proxy_health(db_state.proxy_addr())?.is_none() {
+                return Err(
+                    "local proxy daemon is not running. Run: matpool daemon start, then retry setup"
+                        .to_string(),
+                );
+            }
         }
         let state = AppState::new(db);
-        set_takeover_apps(&state, &options.apps, true).await?;
+        set_takeover_apps(&state, &proxy_app_keys, true).await?;
+        if options.apps.contains(&AppType::Claude.as_str())
+            && !proxy_app_keys.iter().any(|key| key == "claude")
+        {
+            enable_claude_direct_takeover(&state).await?;
+        }
     }
 
     println!();
@@ -1368,6 +1858,47 @@ async fn sync_matpool_models_best_effort(db: &Database, apps: &[&str]) {
             eprintln!("warning: failed to sync Matpool models: {err}");
         }
     }
+}
+
+async fn sync_claude_live_after_model_sync(db: Arc<Database>, apps: &[AppType]) -> CliResult {
+    if !apps.iter().any(|app| matches!(app, AppType::Claude)) {
+        return Ok(());
+    }
+
+    let Some(current_provider_id) = settings::get_effective_current_provider(&db, &AppType::Claude)
+        .map_err(|e| e.to_string())?
+    else {
+        return Ok(());
+    };
+    if current_provider_id != "matpool-claude" {
+        return Ok(());
+    }
+
+    let Some(provider) = db
+        .get_provider_by_id(&current_provider_id, AppType::Claude.as_str())
+        .map_err(|e| e.to_string())?
+    else {
+        return Ok(());
+    };
+
+    let proxy_enabled = db
+        .get_proxy_config_for_app(AppType::Claude.as_str())
+        .await
+        .map(|config| config.enabled)
+        .unwrap_or(false);
+
+    if proxy_enabled {
+        let state = AppState::new(db);
+        state
+            .proxy_service
+            .sync_claude_live_from_provider_while_proxy_active(&provider)
+            .await?;
+    } else if !claude_provider_requires_proxy(&provider) {
+        services::provider::write_live_with_common_config(db.as_ref(), &AppType::Claude, &provider)
+            .map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
 }
 
 async fn sync_codex_live_after_model_sync(db: Arc<Database>, apps: &[AppType]) -> CliResult {
@@ -1700,4 +2231,75 @@ fn print_path_status(label: &str, path: std::path::PathBuf) {
         if path.exists() { "exists" } else { "missing" },
         path.display()
     );
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+    use serde_json::{json, Value};
+
+    #[test]
+    fn parse_claude_model_slot_updates_accepts_supported_slots() {
+        let args = vec![
+            "--sonnet".to_string(),
+            "Claude-Sonnet-5".to_string(),
+            "--custom".to_string(),
+            "Claude-Fable-5".to_string(),
+        ];
+
+        let parsed = parse_claude_model_slot_updates(&args).expect("parse updates");
+
+        assert_eq!(
+            parsed,
+            vec![
+                (
+                    "sonnet",
+                    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+                    "Claude-Sonnet-5".to_string()
+                ),
+                (
+                    "custom",
+                    "ANTHROPIC_CUSTOM_MODEL_OPTION",
+                    "Claude-Fable-5".to_string()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn canonicalize_claude_model_matches_case_insensitively() {
+        let catalog = vec!["Claude-Sonnet-5".to_string(), "GLM-5.2".to_string()];
+
+        assert_eq!(
+            canonicalize_claude_model("claude-sonnet-5", &catalog),
+            Some("Claude-Sonnet-5".to_string())
+        );
+        assert_eq!(canonicalize_claude_model("missing", &catalog), None);
+    }
+
+    #[test]
+    fn set_claude_provider_env_model_writes_model_and_display_name() {
+        let mut provider = provider::Provider::with_id(
+            "matpool-claude".to_string(),
+            "Matpool".to_string(),
+            json!({ "env": {} }),
+            None,
+        );
+
+        set_claude_provider_env_model(
+            &mut provider,
+            "ANTHROPIC_CUSTOM_MODEL_OPTION",
+            "Claude-Fable-5",
+        );
+
+        let env = provider.settings_config["env"].as_object().expect("env");
+        assert_eq!(
+            env["ANTHROPIC_CUSTOM_MODEL_OPTION"],
+            Value::String("Claude-Fable-5".to_string())
+        );
+        assert_eq!(
+            env["ANTHROPIC_CUSTOM_MODEL_OPTION_NAME"],
+            Value::String("Claude-Fable-5".to_string())
+        );
+    }
 }

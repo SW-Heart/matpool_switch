@@ -1,6 +1,6 @@
 {
   "name": "@mtswitch/switch-win32-x64",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Native Matpool Switch CLI binary for Windows x64",
   "license": "MIT",
   "homepage": "https://matpool.com",

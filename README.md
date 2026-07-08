@@ -26,12 +26,38 @@ matpool setup
 matpool login --token <your_matpool_token>
 matpool daemon status
 matpool takeover all
+matpool takeover claude
+matpool models claude list
+matpool models claude set --sonnet <matpool_model_id> --custom <matpool_model_id>
 matpool takeover all --disable
 matpool doctor
 ```
 
-接管模式会把 Claude Code / Claude Desktop / Codex / Gemini CLI 指向本地代理
-`127.0.0.1:15721`。启用接管后，需要保持 Matpool daemon 或桌面客户端运行。
+Claude Code 接管会写入 `~/.claude/settings.json`。当当前 Claude 供应商是
+Matpool 原生 Anthropic 格式时，不需要本地代理；需要协议转换的 Claude 供应商、
+Codex、Gemini 仍会使用本地代理 `127.0.0.1:15721`，此时需要保持 Matpool daemon
+或桌面客户端运行。
+
+执行 `matpool takeover claude` 后，CLI 会展示当前 Claude `/model` 菜单位置对应的
+Matpool 模型 ID，并询问是否使用默认配置：
+
+```text
+Current Claude model configuration:
+  Claude default   Claude-Sonnet-5
+  Claude Sonnet    Claude-Sonnet-5
+  Claude Opus      Claude-Opus-4.8
+  Claude Haiku     Claude-Haiku-4.5
+  Claude Fable     Claude-Fable-5
+  Claude custom    Claude-Fable-5
+
+Use current Claude model configuration? [Y/n]:
+```
+
+直接回车使用当前默认配置；输入 `n` 后会依次提示 `Claude default`、`Claude Sonnet`、
+`Claude Opus`、`Claude Haiku`、`Claude Fable`、`Claude custom`。每一项输入
+Matpool 模型 ID 并回车后会立即保存并提示成功；直接回车保留当前值；输入 `?`
+可查看可用模型 ID。后续可用 `matpool models claude list` 查看可用模型，或用
+`matpool models claude set --sonnet <matpool_model_id>` 修改指定位置。
 
 ## 开发指南
 
@@ -100,13 +126,41 @@ Common commands:
 matpool login --token <your_matpool_token>
 matpool daemon status
 matpool takeover all
+matpool takeover claude
+matpool models claude list
+matpool models claude set --sonnet <matpool_model_id> --custom <matpool_model_id>
 matpool takeover all --disable
 matpool doctor
 ```
 
-Takeover points Claude Code / Claude Desktop / Codex / Gemini CLI at the local
-proxy `127.0.0.1:15721`. Keep the Matpool daemon or desktop client running
-while takeover is enabled.
+Claude Code takeover writes `~/.claude/settings.json`. When the current Claude
+provider uses Matpool's native Anthropic format, no local proxy is required.
+Claude providers that need protocol conversion, Codex, and Gemini still use the
+local proxy `127.0.0.1:15721`; keep the Matpool daemon or desktop client running
+for those takeover modes.
+
+After `matpool takeover claude`, the CLI shows the current Matpool model IDs
+used by Claude Code's `/model` menu:
+
+```text
+Current Claude model configuration:
+  Claude default   Claude-Sonnet-5
+  Claude Sonnet    Claude-Sonnet-5
+  Claude Opus      Claude-Opus-4.8
+  Claude Haiku     Claude-Haiku-4.5
+  Claude Fable     Claude-Fable-5
+  Claude custom    Claude-Fable-5
+
+Use current Claude model configuration? [Y/n]:
+```
+
+Press Enter to keep the defaults. Type `n` to edit each menu position in order:
+`Claude default`, `Claude Sonnet`, `Claude Opus`, `Claude Haiku`,
+`Claude Fable`, and `Claude custom`. Enter a Matpool model ID and press Enter
+to save that slot immediately; press Enter on an empty value to keep the
+current model; type `?` to list available model IDs. Later, run
+`matpool models claude list` or
+`matpool models claude set --sonnet <matpool_model_id>` to update slots.
 
 ## Development
 
