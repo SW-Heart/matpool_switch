@@ -84,7 +84,7 @@ struct PromptTokensDetails {
 
 #[derive(Debug, Clone)]
 struct ToolBlockState {
-    anthropic_index: u32,
+    anthropic_index: Option<u32>,
     id: String,
     name: String,
     started: bool,
@@ -410,18 +410,14 @@ pub fn create_anthropic_sse_stream<E: std::error::Error + Send + 'static>(
                                                     ) = {
                                                         let state = tool_blocks_by_index
                                                             .entry(tool_call.index)
-                                                            .or_insert_with(|| {
-                                                                let index = next_content_index;
-                                                                next_content_index += 1;
-                                                                ToolBlockState {
-                                                                    anthropic_index: index,
-                                                                    id: String::new(),
-                                                                    name: String::new(),
-                                                                    started: false,
-                                                                    pending_args: String::new(),
-                                                                    consecutive_whitespace: 0,
-                                                                    aborted: false,
-                                                                }
+                                                            .or_insert_with(|| ToolBlockState {
+                                                                anthropic_index: None,
+                                                                id: String::new(),
+                                                                name: String::new(),
+                                                                started: false,
+                                                                pending_args: String::new(),
+                                                                consecutive_whitespace: 0,
+                                                                aborted: false,
                                                             });
 
                                                         // 如果此 tool call 已被中止（无限空白 bug），跳过后续处理
@@ -443,6 +439,11 @@ pub fn create_anthropic_sse_stream<E: std::error::Error + Send + 'static>(
                                                                 && !state.id.is_empty()
                                                                 && !state.name.is_empty();
                                                         if should_start {
+                                                            if state.anthropic_index.is_none() {
+                                                                state.anthropic_index =
+                                                                    Some(next_content_index);
+                                                                next_content_index += 1;
+                                                            }
                                                             state.started = true;
                                                         }
                                                         let pending_after_start = if should_start
@@ -492,6 +493,9 @@ pub fn create_anthropic_sse_stream<E: std::error::Error + Send + 'static>(
                                                     };
 
                                                     if should_start {
+                                                        let Some(anthropic_index) = anthropic_index else {
+                                                            continue;
+                                                        };
                                                         let event = json!({
                                                             "type": "content_block_start",
                                                             "index": anthropic_index,
@@ -507,7 +511,9 @@ pub fn create_anthropic_sse_stream<E: std::error::Error + Send + 'static>(
                                                         open_tool_block_indices.insert(anthropic_index);
                                                     }
 
-                                                    if let Some(args) = pending_after_start {
+                                                    if let (Some(anthropic_index), Some(args)) =
+                                                        (anthropic_index, pending_after_start)
+                                                    {
                                                         let event = json!({
                                                             "type": "content_block_delta",
                                                             "index": anthropic_index,
@@ -521,7 +527,9 @@ pub fn create_anthropic_sse_stream<E: std::error::Error + Send + 'static>(
                                                         yield Ok(Bytes::from(sse_data));
                                                     }
 
-                                                    if let Some(args) = immediate_delta {
+                                                    if let (Some(anthropic_index), Some(args)) =
+                                                        (anthropic_index, immediate_delta)
+                                                    {
                                                         let event = json!({
                                                             "type": "content_block_delta",
                                                             "index": anthropic_index,
@@ -588,9 +596,18 @@ pub fn create_anthropic_sse_stream<E: std::error::Error + Send + 'static>(
                                                     state.name.clone()
                                                 };
                                                 state.started = true;
+                                                let index = match state.anthropic_index {
+                                                    Some(index) => index,
+                                                    None => {
+                                                        let index = next_content_index;
+                                                        next_content_index += 1;
+                                                        state.anthropic_index = Some(index);
+                                                        index
+                                                    }
+                                                };
                                                 let pending = std::mem::take(&mut state.pending_args);
                                                 late_tool_starts.push((
-                                                    state.anthropic_index,
+                                                    index,
                                                     fallback_id,
                                                     fallback_name,
                                                     pending,
@@ -951,6 +968,34 @@ mod tests {
             .collect();
         assert!(deltas.contains(&"{\"a\":"));
         assert!(deltas.contains(&"1}"));
+    }
+
+    #[tokio::test]
+    async fn test_streaming_tool_placeholder_does_not_create_content_index_gap() {
+        let input = concat!(
+            "data: {\"id\":\"chatcmpl_gap\",\"model\":\"gpt-4o\",\"choices\":[{\"delta\":{\"content\":\"I will write the file.\"}}]}\n\n",
+            "data: {\"id\":\"chatcmpl_gap\",\"model\":\"gpt-4o\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"type\":\"function\",\"function\":{}},{\"index\":1,\"type\":\"function\",\"function\":{}}]}}]}\n\n",
+            "data: {\"id\":\"chatcmpl_gap\",\"model\":\"gpt-4o\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":2,\"id\":\"call_write\",\"type\":\"function\",\"function\":{\"name\":\"Write\",\"arguments\":\"{\\\"file_path\\\":\\\"index.html\\\"}\"}}]}}]}\n\n",
+            "data: {\"id\":\"chatcmpl_gap\",\"model\":\"gpt-4o\",\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":6,\"completion_tokens\":2}}\n\n",
+            "data: [DONE]\n\n"
+        );
+
+        let events = collect_anthropic_events(input).await;
+        let start_indices: Vec<u64> = events
+            .iter()
+            .filter(|event| event_type(event) == Some("content_block_start"))
+            .filter_map(|event| event.get("index").and_then(|value| value.as_u64()))
+            .collect();
+
+        assert_eq!(start_indices, vec![0, 1]);
+        assert!(events.iter().any(|event| {
+            event_type(event) == Some("content_block_start")
+                && event
+                    .pointer("/content_block/type")
+                    .and_then(|value| value.as_str())
+                    == Some("tool_use")
+                && event.get("index").and_then(|value| value.as_u64()) == Some(1)
+        }));
     }
 
     #[tokio::test]
