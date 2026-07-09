@@ -1,6 +1,6 @@
 {
   "name": "@mtswitch/switch-darwin-arm64",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "Native Matpool Switch CLI binary for macOS arm64",
   "license": "MIT",
   "homepage": "https://matpool.com",
