@@ -1149,15 +1149,13 @@ fn daemon_install() -> CliResult {
 #[cfg(target_os = "linux")]
 fn daemon_install() -> CliResult {
     let service_path = linux_systemd_service_path()?;
-    let log_dir = get_app_config_dir().join("logs");
-    fs::create_dir_all(&log_dir).map_err(|e| format!("failed to create log dir: {e}"))?;
     if let Some(parent) = service_path.parent() {
         fs::create_dir_all(parent)
             .map_err(|e| format!("failed to create systemd user dir: {e}"))?;
     }
 
     let exe = env::current_exe().map_err(|e| format!("failed to resolve current exe: {e}"))?;
-    let service = linux_systemd_service(&exe, &log_dir);
+    let service = linux_systemd_service(&exe);
     fs::write(&service_path, service).map_err(|e| format!("failed to write service: {e}"))?;
 
     run_systemctl_user(&["daemon-reload"])?;
@@ -1383,9 +1381,6 @@ fn daemon_logs() -> CliResult {
 
 #[cfg(target_os = "linux")]
 fn daemon_logs() -> CliResult {
-    let log_dir = get_app_config_dir().join("logs");
-    println!("stdout: {}", log_dir.join("daemon.out.log").display());
-    println!("stderr: {}", log_dir.join("daemon.err.log").display());
     println!(
         "journal: journalctl --user -u {}",
         linux_systemd_service_name()
@@ -1496,9 +1491,7 @@ fn linux_systemd_service_path() -> CliResult<PathBuf> {
 }
 
 #[cfg(target_os = "linux")]
-fn linux_systemd_service(exe: &std::path::Path, log_dir: &std::path::Path) -> String {
-    let stdout = log_dir.join("daemon.out.log");
-    let stderr = log_dir.join("daemon.err.log");
+fn linux_systemd_service(exe: &std::path::Path) -> String {
     format!(
         r#"[Unit]
 Description=Matpool Switch local proxy daemon
@@ -1510,16 +1503,14 @@ ExecStart={} daemon run
 Restart=always
 RestartSec=3
 WorkingDirectory={}
-StandardOutput=append:{}
-StandardError=append:{}
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=default.target
 "#,
         systemd_quote_path(exe),
-        systemd_quote_path(&get_app_config_dir()),
-        systemd_unit_escape(&stdout.to_string_lossy()),
-        systemd_unit_escape(&stderr.to_string_lossy())
+        systemd_quote_path(&get_app_config_dir())
     )
 }
 
@@ -2570,6 +2561,17 @@ fn print_path_status(label: &str, path: std::path::PathBuf) {
 mod cli_tests {
     use super::*;
     use serde_json::{json, Value};
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_systemd_service_uses_backward_compatible_journal_output() {
+        let service = linux_systemd_service(std::path::Path::new("/opt/Matpool Switch/matpool"));
+
+        assert!(service.contains("ExecStart=\"/opt/Matpool Switch/matpool\" daemon run"));
+        assert!(service.contains("StandardOutput=journal"));
+        assert!(service.contains("StandardError=journal"));
+        assert!(!service.contains("append:"));
+    }
 
     #[test]
     fn parse_claude_model_slot_updates_accepts_supported_slots() {
