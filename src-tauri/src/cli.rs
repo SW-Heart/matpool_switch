@@ -1502,15 +1502,13 @@ Type=simple
 ExecStart={} daemon run
 Restart=always
 RestartSec=3
-WorkingDirectory={}
 StandardOutput=journal
 StandardError=journal
 
 [Install]
 WantedBy=default.target
 "#,
-        systemd_quote_path(exe),
-        systemd_quote_path(&get_app_config_dir())
+        systemd_quote_path(exe)
     )
 }
 
@@ -2570,6 +2568,7 @@ mod cli_tests {
         assert!(service.contains("ExecStart=\"/opt/Matpool Switch/matpool\" daemon run"));
         assert!(service.contains("StandardOutput=journal"));
         assert!(service.contains("StandardError=journal"));
+        assert!(!service.contains("WorkingDirectory="));
         assert!(!service.contains("append:"));
     }
 

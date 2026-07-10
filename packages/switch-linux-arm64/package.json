@@ -1,6 +1,6 @@
 {
   "name": "@mtswitch/switch-linux-arm64",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "description": "Native Matpool Switch CLI binary for Linux arm64",
   "license": "MIT",
   "homepage": "https://matpool.com",
