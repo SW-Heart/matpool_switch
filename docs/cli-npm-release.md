@@ -16,7 +16,11 @@ The main package contains only a Node.js shim. npm installs the matching
 optional native package for the current OS and CPU.
 
 The GitHub Actions workflow builds macOS Apple Silicon on `macos-14` and macOS
-Intel on `macos-15-intel`.
+Intel on `macos-15-intel`. Linux CLI artifacts are built as static musl binaries,
+so they do not require a particular host GLIBC version or a host OpenSSL 1.1/3
+library. This compatibility guarantee applies to the headless `matpool` npm CLI;
+the desktop application still follows its native WebKitGTK distribution
+requirements.
 
 ## Prerequisites
 
@@ -73,6 +77,16 @@ Stage the current platform binary into its native npm package:
 cargo build --manifest-path src-tauri/Cargo.toml --bin matpool --no-default-features --profile cli-release
 node scripts/stage-npm-binary.js
 node scripts/validate-cli-npm-release.js --require-staged-binaries
+```
+
+To reproduce a Linux release artifact locally, install `musl-tools` and build
+for the matching target before staging it:
+
+```bash
+rustup target add x86_64-unknown-linux-musl
+cargo build --manifest-path src-tauri/Cargo.toml --bin matpool --no-default-features --profile cli-release --target x86_64-unknown-linux-musl
+node scripts/stage-npm-binary.js --target x86_64-unknown-linux-musl
+scripts/verify-linux-cli-binary.sh packages/switch-linux-x64/bin/matpool
 ```
 
 For debug builds:

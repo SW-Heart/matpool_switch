@@ -24,19 +24,32 @@ if (!packageDirName) {
 
 const binaryName = process.platform === 'win32' ? 'matpool.exe' : 'matpool'
 const profileFlagIndex = process.argv.indexOf('--profile')
+const targetFlagIndex = process.argv.indexOf('--target')
 const profile = process.argv.includes('--debug')
   ? 'debug'
   : profileFlagIndex >= 0 && process.argv[profileFlagIndex + 1]
     ? process.argv[profileFlagIndex + 1]
     : 'cli-release'
-const source = path.join(repoRoot, 'src-tauri', 'target', profile, binaryName)
+const rustTarget =
+  targetFlagIndex >= 0 && process.argv[targetFlagIndex + 1]
+    ? process.argv[targetFlagIndex + 1]
+    : undefined
+const source = path.join(
+  repoRoot,
+  'src-tauri',
+  'target',
+  ...(rustTarget ? [rustTarget] : []),
+  profile,
+  binaryName,
+)
 const targetDir = path.join(repoRoot, 'packages', packageDirName, 'bin')
 const target = path.join(targetDir, binaryName)
 
 if (!fs.existsSync(source)) {
   console.error(`Missing ${profile} binary: ${source}`)
   const buildProfile = profile === 'debug' ? '' : ` --profile ${profile}`
-  console.error(`Build it first: cargo build --manifest-path src-tauri/Cargo.toml --bin matpool --no-default-features${buildProfile}`)
+  const targetArg = rustTarget ? ` --target ${rustTarget}` : ''
+  console.error(`Build it first: cargo build --manifest-path src-tauri/Cargo.toml --bin matpool --no-default-features${buildProfile}${targetArg}`)
   process.exit(1)
 }
 

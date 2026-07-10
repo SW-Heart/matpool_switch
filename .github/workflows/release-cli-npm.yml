@@ -39,8 +39,10 @@ jobs:
             package: switch-darwin-x64
           - os: ubuntu-24.04
             package: switch-linux-x64
+            rust_target: x86_64-unknown-linux-musl
           - os: ubuntu-24.04-arm
             package: switch-linux-arm64
+            rust_target: aarch64-unknown-linux-musl
           - os: windows-2022
             package: switch-win32-x64
 
@@ -57,6 +59,16 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - uses: dtolnay/rust-toolchain@stable
+
+      # Build Linux artifacts against musl instead of the runner's GLIBC.
+      # This lets the npm CLI run on older supported distributions and removes
+      # the need for a system libssl/libcrypto package.
+      - name: Install static Linux build toolchain
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes musl-tools
+          rustup target add ${{ matrix.rust_target }}
 
       - name: Verify npm token is configured
         env:
@@ -75,11 +87,15 @@ jobs:
 
       - name: Build CLI
         if: steps.native-package.outputs.exists != 'true'
-        run: cargo build --manifest-path src-tauri/Cargo.toml --bin matpool --no-default-features --profile cli-release
+        run: cargo build --manifest-path src-tauri/Cargo.toml --bin matpool --no-default-features --profile cli-release ${{ matrix.rust_target && format('--target {0}', matrix.rust_target) || '' }}
 
       - name: Stage native binary
         if: steps.native-package.outputs.exists != 'true'
-        run: node scripts/stage-npm-binary.js
+        run: node scripts/stage-npm-binary.js ${{ matrix.rust_target && format('--target {0}', matrix.rust_target) || '' }}
+
+      - name: Verify Linux CLI is distribution-independent
+        if: steps.native-package.outputs.exists != 'true' && runner.os == 'Linux'
+        run: scripts/verify-linux-cli-binary.sh packages/${{ matrix.package }}/bin/matpool
 
       - name: Publish native package
         if: steps.native-package.outputs.exists != 'true'

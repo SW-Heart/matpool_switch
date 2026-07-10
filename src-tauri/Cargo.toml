@@ -1,6 +1,6 @@
 [package]
 name = "matpool-switch"
-version = "0.1.11"
+version = "0.1.12"
 description = "Matpool 一键接管 Vibe Coding CLI 工具流量的桌面客户端"
 authors = ["Matpool"]
 license = "MIT"
@@ -61,7 +61,9 @@ tauri-plugin-window-state = { version = "2", optional = true }
 dirs = "5.0"
 toml = "0.8"
 toml_edit = "0.22"
-reqwest = { version = "0.12", features = ["rustls-tls", "json", "stream", "socks"] }
+# Keep TLS self-contained. reqwest's default features enable native-tls, which
+# dynamically links OpenSSL on Linux and makes the CLI depend on libssl.so.1.1.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "socks"] }
 arboard = "3.6"
 flate2 = "1"
 brotli = "7"
