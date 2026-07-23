@@ -27,6 +27,8 @@ matpool login --token <your_matpool_token>
 matpool daemon status
 matpool takeover all
 matpool takeover claude
+matpool takeover codex
+matpool provider switch codex matpool-codex
 matpool models claude list
 matpool models claude set --sonnet <matpool_model_id> --custom <matpool_model_id>
 matpool takeover all --disable
@@ -128,6 +130,8 @@ matpool login --token <your_matpool_token>
 matpool daemon status
 matpool takeover all
 matpool takeover claude
+matpool takeover codex
+matpool provider switch codex matpool-codex
 matpool models claude list
 matpool models claude set --sonnet <matpool_model_id> --custom <matpool_model_id>
 matpool takeover all --disable

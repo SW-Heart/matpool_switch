@@ -134,7 +134,7 @@ Usage:
   matpool models claude set [options]  Set Claude model slots, then sync live config
   matpool provider list [app|all]      List configured providers
   matpool provider seed                Ensure built-in Matpool/official providers exist
-  matpool provider switch <app> <id>   Switch current provider (claude only; 'default' restores your original config)
+  matpool provider switch <app> <id>   Switch current provider (claude/codex; 'default' restores your original config)
   matpool takeover <app|all>           Enable local proxy takeover for an app
   matpool takeover <app|all> --disable Disable local proxy takeover for an app
   matpool daemon install               Install user-level background daemon
@@ -307,14 +307,38 @@ async fn provider_cli(args: &[String]) -> CliResult {
 }
 
 async fn provider_switch(app: &str, provider_id: &str) -> CliResult {
-    if app != "claude" {
-        return Err(format!(
-            "provider switch for '{app}' is not supported in CLI yet; only 'claude' direct mode is supported"
-        ));
-    }
     let db = init_db()?;
     let state = AppState::new(db);
-    switch_claude_provider(&state, provider_id).await
+    match app {
+        "claude" => switch_claude_provider(&state, provider_id).await,
+        "codex" => switch_cli_provider(&state, AppType::Codex, provider_id),
+        _ => Err(format!(
+            "provider switch for '{app}' is not supported in CLI yet; supported apps: claude, codex"
+        )),
+    }
+}
+
+fn switch_cli_provider(state: &AppState, app_type: AppType, provider_id: &str) -> CliResult {
+    let result = services::provider::ProviderService::switch(state, app_type.clone(), provider_id)
+        .map_err(|e| e.to_string())?;
+
+    println!(
+        "Switched {} provider to {}.",
+        app_type.as_str(),
+        provider_id
+    );
+    for warning in result.warnings {
+        eprintln!("warning: {warning}");
+    }
+    Ok(())
+}
+
+fn takeover_provider_id(app_type: &AppType) -> Option<&'static str> {
+    match app_type {
+        // Claude has a separate direct/proxy preparation flow below.
+        AppType::Codex => Some("matpool-codex"),
+        _ => None,
+    }
 }
 
 async fn models_cli(args: &[String]) -> CliResult {
@@ -752,6 +776,11 @@ async fn takeover(args: &[String]) -> CliResult {
                     "local proxy daemon is not running. Start it first with: matpool daemon start"
                         .to_string(),
                 );
+            }
+        }
+        for app_type in expand_app_types_from_keys(&app_keys)? {
+            if let Some(provider_id) = takeover_provider_id(&app_type) {
+                switch_cli_provider(&state, app_type, provider_id)?;
             }
         }
     }
@@ -1276,6 +1305,16 @@ fn daemon_stop_service() -> CliResult {
 #[cfg(target_os = "linux")]
 fn daemon_stop_service() -> CliResult {
     run_systemctl_user(&["stop", linux_systemd_service_name()])?;
+    std::thread::sleep(Duration::from_millis(300));
+
+    let state = read_db_state().unwrap_or_default();
+    if let Some(addr) = probe_proxy_health(state.proxy_addr())? {
+        return Err(format!(
+            "systemd service stopped, but another process is still listening at {addr}; find it with: ss -lntp | grep ':{}'",
+            addr.port()
+        ));
+    }
+
     println!("Matpool daemon stopped.");
     Ok(())
 }
@@ -2643,5 +2682,12 @@ mod cli_tests {
         );
 
         assert!(claude_provider_requires_proxy(&provider));
+    }
+
+    #[test]
+    fn codex_takeover_selects_matpool_provider() {
+        assert_eq!(takeover_provider_id(&AppType::Codex), Some("matpool-codex"));
+        assert_eq!(takeover_provider_id(&AppType::Claude), None);
+        assert_eq!(takeover_provider_id(&AppType::Gemini), None);
     }
 }
